@@ -1,0 +1,44 @@
+# Dependencies
+node_modules/
+.venv/
+__pycache__/
+*.pyc
+
+# Build outputs
+release/
+release2/
+dist/
+build/
+build-runtime/
+out/
+
+# User data / secrets (never commit)
+settings.json
+.env
+.env.*
+*.sqlite3
+*.db
+cookies*.json
+storage-state*.json
+*.lock
+*.lock.json
+!requirements*.lock.json
+
+# Runtime / cache
+var/
+tmp/
+temp/
+*.log
+失败视频清单-*.md
+
+# Whisper / model weights (downloaded at runtime, hundreds of MB)
+models/
+*.onnx
+*.bin
+*.pt
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

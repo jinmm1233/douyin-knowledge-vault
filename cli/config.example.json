@@ -1,0 +1,19 @@
+{
+  "stateDir": "./var",
+  "profile": "simple",
+  "vaultPath": "C:\\Users\\USER\\Documents",
+  "vaultFolder": "Douyin Knowledge",
+  "discoveryLimit": 50,
+  "ffprobeCommand": "ffprobe",
+  "ffmpegCommand": "ffmpeg",
+  "pythonCommand": ".\\.venv\\Scripts\\python.exe",
+  "whisperModel": "Systran/faster-whisper-small",
+  "whisperModelLock": "./models/faster-whisper-small.lock.json",
+  "whisperModelLabel": "faster-whisper/Systran/faster-whisper-small@536b0662742c02347bc0e980a01041f333bce120",
+  "language": "zh",
+  "extractorProvider": "local",
+  "cloudTranscriptOptIn": false,
+  "llmModel": "",
+  "schedulerTaskName": "Douyin Obsidian Knowledge",
+  "scheduleMinutes": 60
+}
