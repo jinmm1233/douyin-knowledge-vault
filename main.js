@@ -29,7 +29,7 @@ const DEFAULT_SETTINGS = {
   countLimit: 100,
   pauseAutoResumeMinutes: 0, // 暂停后系统空闲超过该分钟数自动恢复（0=关闭，只手动恢复）
   distillOutputDir: BUNDLED ? path.join(os.homedir(), "douyin-distill") : path.join(os.homedir(), "douyin-distill"),
-  cangjiePath: BUNDLED ? path.join(BUNDLED, "cangjie") : "",
+  cangjiePath: BUNDLED ? path.join(BUNDLED, "cangjie") : path.join(__dirname, "cangjie"),
   pythonPath: BUNDLED ? path.join(BUNDLED, "project", ".venv", "Scripts", "python.exe") : "",
   // 每周知识周报：enabled=开关；weekday=1(周一)~7(周日)；lastShownDate=上次弹窗日期；streak=连续达成周数
   weeklyReport: { enabled: false, weekday: 2, lastShownDate: "", streak: 0, bestStreak: 0, totalShown: 0, aiSummary: "", aiSummaryWeek: "", aiDirection: "", aiDirectionWeek: "" },

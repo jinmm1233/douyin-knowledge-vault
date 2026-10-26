@@ -26,6 +26,7 @@
       "renderer/**/*",
       "assets/**/*",
       "cli/**/*",
+      "cangjie/**/*",
       "package.json"
     ],
     "extraResources": [
