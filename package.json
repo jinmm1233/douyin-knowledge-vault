@@ -1,0 +1,54 @@
+{
+  "name": "douyin-knowledge-app",
+  "version": "1.0.0",
+  "description": "抖音收藏 → Obsidian 知识库桌面版：采集、转录、知识提取、笔记浏览、仓颉蒸馏，开箱即用（内置 Python / Whisper / 仓颉）",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win nsis"
+  },
+  "license": "MIT",
+  "author": "eason",
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "com.douyin.knowledge",
+    "productName": "抖音知识库",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "cangjie-runner.js",
+      "renderer/**/*",
+      "assets/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "build-runtime",
+        "to": "dok-runtime"
+      }
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "requestedExecutionLevel": "asInvoker"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "抖音知识库",
+      "uninstallDisplayName": "抖音知识库",
+      "include": "build/uninstaller.nsh",
+      "artifactName": "抖音知识库-Setup-${version}.${ext}"
+    }
+  }
+}

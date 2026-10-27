@@ -1,0 +1,721 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: file:">
+<title>抖音知识库</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<div id="app">
+  <!-- 左侧导航 -->
+  <aside id="sidebar">
+    <div class="logo">
+      <div class="logo-mark">知</div>
+      <div class="logo-text">抖音知识库</div>
+    </div>
+    <nav id="nav">
+      <button class="nav-item active" data-page="dashboard">
+        <span class="nav-ico">◈</span>总览
+      </button>
+      <button class="nav-item" data-page="new">
+        <span class="nav-ico">＋</span>新增收藏
+      </button>
+      <button class="nav-item" data-page="knowledge">
+        <span class="nav-ico">▤</span>知识库
+      </button>
+      <button class="nav-item" data-page="search">
+        <span class="nav-ico">⌕</span>语义检索
+      </button>
+      <button class="nav-item" data-page="pipeline">
+        <span class="nav-ico">⇄</span>流水线
+      </button>
+      <button class="nav-item" data-page="skills">
+        <span class="nav-ico">✎</span>我的技能
+      </button>
+      <button class="nav-item" data-page="blueprint">
+        <span class="nav-ico">✦</span>知识卡片
+      </button>
+      <button class="nav-item" data-page="failures">
+        <span class="nav-ico">⚠</span>止损看板
+      </button>
+      <button class="nav-item" data-page="distill">
+        <span class="nav-ico">⚗</span>知识蒸馏与 AI 问答
+      </button>
+      <button class="nav-item" data-page="settings">
+        <span class="nav-ico">⚙</span>设置
+      </button>
+    </nav>
+    <div class="side-foot" id="side-foot">未连接</div>
+  </aside>
+
+  <!-- 主内容 -->
+  <main id="main">
+
+    <!-- 总览 -->
+    <section id="page-dashboard" class="page">
+      <header class="page-head">
+        <h1>总览</h1>
+        <p class="sub">你的抖音收藏知识库处理概况</p>
+      </header>
+      <div class="stat-grid" id="stat-grid"></div>
+      <div class="panel schedule-panel" id="schedule-panel">
+        <div class="panel-title">定时任务 · 每日自动同步</div>
+        <div class="schedule-main">
+          <div class="schedule-bar">
+            <div class="bar-track"><div class="bar-fill" id="sched-bar"></div></div>
+            <span class="bar-label" id="sched-bar-label">0%</span>
+          </div>
+          <div class="schedule-meta" id="schedule-meta">加载中…</div>
+          <div class="schedule-alert" id="schedule-alert" hidden></div>
+          <div class="hint" style="margin-top:8px;color:#fbbf24">⚠ 每日任务到点运行时，<b>电脑需开机且已登录账号</b>；关机/睡眠/锁屏未登录状态下当天自动同步不会执行。</div>
+        </div>
+      </div>
+      <div class="dash-row">
+        <div class="panel">
+          <div class="panel-title">快捷操作</div>
+          <div class="quick-actions">
+            <button class="btn primary" id="dash-process-one">处理 1 条</button>
+            <button class="btn" id="dash-batch">批量 20 条</button>
+            <button class="btn ghost" id="dash-refresh">刷新统计</button>
+          </div>
+          <div class="hint">批量处理会自动 下载→转录→云端提取→归档，断网自动续跑。</div>
+        </div>
+        <div class="panel grow">
+          <div class="panel-title">首次处理收藏</div>
+          <div class="collect-mode">
+            <label class="radio-row"><input type="radio" name="collect-mode" id="cm-all" value="all" checked /> 收藏视频（全部收藏，AI 自动分类）</label>
+            <label class="radio-row"><input type="radio" name="collect-mode" id="cm-folder" value="folder" /> 指定收藏夹（收藏夹名=最大父类，AI 规划子类）</label>
+          </div>
+          <div class="collect-folder-row" id="collect-folder-row" hidden>
+            <select id="collect-folder-select"><option value="">（点击「更新收藏夹」加载）</option></select>
+            <button class="btn ghost small" id="collect-folders-refresh">更新收藏夹</button>
+          </div>
+          <div class="collect-actions">
+            <button class="btn primary" id="dash-start-collect">开始处理收藏</button>
+            <span class="hint" id="collect-status"></span>
+          </div>
+          <div class="first-run-bar">
+            <div class="bar-track"><div class="bar-fill" id="first-bar"></div></div>
+            <span class="bar-label" id="first-bar-label">0%</span>
+          </div>
+          <div class="first-run-meta" id="first-run-meta">加载中…</div>
+          <div class="hint">这是首次处理收藏的整体进度（按处理窗口计算：未设置起始日期或条数时默认处理全部收藏，设置了则只处理窗口内的量）。每日任务进度在上方定时任务面板。</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 未登录弹窗 -->
+    <div id="login-ask-overlay" hidden>
+      <div class="date-ask-card">
+        <div class="date-ask-title">请先登录抖音</div>
+        <p class="date-ask-text">处理收藏需要读取你的抖音收藏列表，目前检测到<b>尚未登录</b>。请点击下方按钮前往设置页，用手机扫码登录后再回来点「开始处理收藏」。</p>
+        <div class="date-ask-actions">
+          <button class="btn primary" id="login-ask-go">去登录</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 是否设置日期弹窗 -->
+    <div id="date-ask-overlay" hidden>
+      <div class="date-ask-card">
+        <div class="date-ask-title">开始处理收藏</div>
+        <p class="date-ask-text">是否设置起始日期？<br/>设为「否」将默认处理<b>所有</b>收藏视频（含较早的历史收藏）；设为「是」可先跳转到设置页指定只处理视频发布时间在某一日期之后的收藏视频（抖音不提供精确收藏时刻，以视频的发布时间为准）。</p>
+        <div class="date-ask-actions">
+          <button class="btn primary" id="date-ask-yes">是，去设置日期</button>
+          <button class="btn" id="date-ask-no">否，处理所有收藏</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 首次打开欢迎引导 -->
+    <div id="first-run-overlay" hidden>
+      <div class="date-ask-card">
+        <div class="date-ask-title">👋 欢迎使用抖音知识库</div>
+        <p class="date-ask-text">第一次使用，建议先花一分钟完成两件准备：<br/>
+          <b>① 设置首次处理范围</b>——去「设置 → 处理方式」选一种：按时间（只处理某天之后发布的收藏）、按数量（最近 N 条快照）、或处理全部收藏。窗口定好就不用反复改。<br/>
+          <b>② 填写自己的 API Key</b>——在设置页填入 DeepSeek（或兼容 OpenAI 接口）的 Key，AI 提炼笔记这步才能跑；不填只能转录、出不了知识笔记。</p>
+        <div class="date-ask-actions">
+          <button class="btn primary" id="first-run-go">去设置</button>
+          <button class="btn" id="first-run-skip">我知道了，先看看</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 新增收藏：核对与补充 -->
+    <section id="page-new" class="page" hidden>
+      <header class="page-head">
+        <h1>新增收藏</h1>
+        <p class="sub">每天定时任务识别出的新增收藏（按视频发布时间筛选起始日期之后的新增收藏），可在这里核对是否有遗漏</p>
+      </header>
+      <div class="panel">
+        <div class="panel-title">补充抖音视频链接（万一漏了，粘贴到这里手动加入）</div>
+        <textarea id="new-urls" rows="3" placeholder="一行一条，粘贴抖音视频链接（支持 /video/xxx、/note/xxx、v.douyin.com 短链）"></textarea>
+        <div class="new-url-actions">
+          <button class="btn primary" id="new-add-now">添加并立即处理</button>
+          <button class="btn ghost" id="new-add-queue">仅加入待处理（等下次任务）</button>
+          <span id="new-add-status" class="muted"></span>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="panel-title">最近新增收藏
+          <span class="pull-right">
+            <select id="new-range">
+              <option value="1">最近 1 天</option>
+              <option value="3">最近 3 天</option>
+              <option value="7" selected>最近 7 天</option>
+              <option value="30">最近 30 天</option>
+              <option value="0">全部</option>
+            </select>
+            <button class="btn ghost small" id="new-refresh">刷新</button>
+          </span>
+        </div>
+        <div id="new-list" class="new-list">加载中…</div>
+      </div>
+    </section>
+
+    <!-- 知识库 -->
+    <section id="page-knowledge" class="page" hidden>
+      <header class="page-head kb-head">
+        <div>
+          <h1>知识库</h1>
+          <p class="sub">浏览、搜索、编辑你的全部笔记</p>
+        </div>
+        <div class="kb-tools">
+          <button class="btn small ghost" id="kb-refresh" title="重新扫描知识库文件（Obsidian 里新增/删除笔记后点这里）">⟳ 刷新</button>
+          <select id="kb-group" class="kb-group-select" title="选择大分类">
+            <option value="">全部分组</option>
+          </select>
+          <div class="search-box">
+            <input id="kb-search" type="text" placeholder="全文搜索笔记…" />
+            <button class="btn ghost" id="kb-search-btn">搜索</button>
+          </div>
+          <button class="btn" id="kb-graph-btn">图谱视图</button>
+          <button class="btn ghost" id="kb-new-btn" title="在当前层级新建分类">＋ 新建</button>
+        </div>
+      </header>
+      <div id="search-results" hidden></div>
+      <div id="graph-view" hidden></div>
+      <div class="kb-crumb" id="kb-crumb"></div>
+      <div id="folder-grid" class="folder-grid kb-full"></div>
+    </section>
+
+    <!-- 全屏阅读器（位于所有页面之外，任何页面都可打开） -->
+    <div id="reader-overlay" hidden>
+      <div class="reader-toolbar" id="reader-toolbar">
+        <button class="btn small ghost" id="btn-reader-back">← 返回</button>
+        <span class="reader-file" id="reader-file"></span>
+        <span class="spacer"></span>
+        <button class="btn small" id="btn-edit">编辑</button>
+        <button class="btn small" id="btn-save" hidden>保存</button>
+        <button class="btn small ghost" id="btn-cancel" hidden>取消</button>
+      </div>
+      <div id="reader-empty">从左侧选择一篇笔记</div>
+      <article id="reader-content" class="markdown-body" hidden></article>
+      <textarea id="reader-editor" hidden></textarea>
+    </div>
+
+    <!-- 语义检索 -->
+    <section id="page-search" class="page" hidden>
+      <header class="page-head">
+        <h1>语义检索</h1>
+        <p class="sub">全文搜索全部笔记，实时跳转阅读</p>
+      </header>
+      <div class="panel">
+        <div class="search-line">
+          <input id="search-input" type="text" placeholder="输入关键词，检索全部笔记内容…" />
+          <button class="btn primary" id="search-btn">检索</button>
+          <button class="btn ghost" id="search-clear">清空</button>
+        </div>
+      </div>
+      <div id="global-results" class="search-results-page"></div>
+    </section>
+
+    <!-- 流水线 -->
+    <section id="page-pipeline" class="page" hidden>
+      <header class="page-head">
+        <h1>流水线</h1>
+        <p class="sub">实时运行日志 · 同步进度 · 锁与异常状态</p>
+      </header>
+      <div class="panel schedule-panel">
+        <div class="panel-title">同步进度（处理率）</div>
+        <div class="schedule-main">
+          <div class="schedule-bar">
+            <div class="bar-track"><div class="bar-fill" id="pipe-bar"></div></div>
+            <span class="bar-label" id="pipe-bar-label">0%</span>
+          </div>
+          <div class="schedule-meta" id="pipe-meta">加载中…</div>
+          <div class="schedule-alert" id="pipe-alert" hidden></div>
+          <div class="pause-row">
+            <button class="btn" id="btn-pause">⏸ 暂停任务</button>
+            <button class="btn primary" id="btn-resume" hidden>▶ 继续任务</button>
+            <span class="pause-status" id="pause-status"></span>
+            <span class="sched-hint">暂停后会在当前视频处理完、下一条开始前停下；继续后自动接着跑（定时任务共用同一开关）。</span>
+          </div>
+        </div>
+      </div>
+      <div class="panel grow">
+        <div class="panel-title">运行日志</div>
+        <div class="log-box pipe-log" id="pipe-log"></div>
+        <div class="settings-actions" style="margin-top:10px">
+          <button class="btn" id="pipe-refresh">刷新状态</button>
+          <span class="sched-hint">日志实时接收：处理 1 条 / 批量操作在「总览 → 快捷操作」里发起，日志会同步显示在这里。</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- 我的技能 -->
+    <section id="page-skills" class="page" hidden>
+      <header class="page-head">
+        <h1>我的技能</h1>
+        <p class="sub">已蒸馏生成的 Agent Skill（仓颉 RIA-TV++ 七阶段引擎）</p>
+      </header>
+      <div class="skills-tools">
+        <button class="btn" id="skills-refresh">刷新列表</button>
+        <span class="sched-hint" id="skills-note"></span>
+      </div>
+      <div id="skills-grid" class="skills-grid"></div>
+    </section>
+
+    <!-- 知识卡片（原系统蓝图） -->
+    <section id="page-blueprint" class="page" hidden>
+      <header class="page-head">
+        <h1>知识卡片</h1>
+        <p class="sub">按大分类由 AI 提炼知识：优先整理互相印证的观点，再汇总单视频知识；视频数不足的分类自动跳过</p>
+      </header>
+      <div class="kb-tools" style="margin-bottom:14px">
+        <button class="btn" id="card-refresh-all">刷新全部卡片</button>
+        <button class="btn" id="card-refresh-list">重新读取</button>
+        <span class="sched-hint" id="card-note"></span>
+      </div>
+      <div id="card-grid" class="card-grid"></div>
+
+      <!-- 卡片详情视图 -->
+      <div id="card-detail" class="panel card-detail" hidden>
+        <div class="card-detail-head">
+          <div class="card-detail-head-main">
+            <img class="kb-book-mark" src="../assets/card-icons/knowledge-book.png" alt="知识卡片"/>
+            <div>
+              <div class="panel-title" id="card-detail-title"></div>
+              <div class="sched-hint" id="card-detail-meta"></div>
+            </div>
+          </div>
+          <div class="card-detail-actions">
+            <button class="btn" id="card-regen">重新生成</button>
+            <button class="btn" id="card-back">返回列表</button>
+          </div>
+        </div>
+        <div class="card-tabs" id="card-tabs">
+          <button class="card-tab active" data-tab="summary">总览</button>
+          <button class="card-tab" data-tab="consensus">印证观点</button>
+          <button class="card-tab" data-tab="mindmap">思维导图</button>
+          <button class="card-tab" data-tab="network">印证网络</button>
+          <button class="card-tab" data-tab="table">分类速查</button>
+          <button class="card-tab" data-tab="knowledge">单视频知识</button>
+        </div>
+        <div id="card-tab-content" class="card-tab-content"></div>
+      </div>
+    </section>
+
+    <!-- 止损看板 -->
+    <section id="page-failures" class="page" hidden>
+      <header class="page-head">
+        <h1>止损看板</h1>
+        <p class="sub">处理失败视频清单 · 广告/短剧/搞笑等已跳过项</p>
+      </header>
+      <div class="fail-tools">
+        <select id="fail-file" class="kb-group-select"></select>
+        <button class="btn" id="fail-refresh">刷新</button>
+        <span class="sched-hint" id="fail-note"></span>
+      </div>
+      <div id="fail-content" class="panel markdown-body fail-content"></div>
+    </section>
+
+    <!-- 知识蒸馏与 AI 问答 -->
+    <section id="page-distill" class="page" hidden>
+      <header class="page-head">
+        <h1>知识蒸馏与 AI 问答</h1>
+        <p class="sub">把某一子类的多篇笔记蒸馏成可直接使用的 Agent Skill，并随时向 AI 提问</p>
+      </header>
+      <div class="distill-steps">
+        <div class="panel">
+          <div class="panel-title">① 选择要蒸馏的子类 <span class="engine-tag">仓颉 RIA-TV++ 七阶段</span></div>
+          <div class="distill-pick">
+            <select id="dist-major"><option value="">选择大类</option></select>
+            <select id="dist-group" disabled><option value="">选择父类</option></select>
+            <select id="dist-sub" disabled><option value="">选择子类</option></select>
+          </div>
+          <div class="distill-meta" id="dist-meta" hidden>
+            <span>笔记 <b id="dist-files">0</b> 篇</span>
+            <span>约 <b id="dist-tokens">0</b> tokens</span>
+            <button class="btn primary" id="dist-run">开始蒸馏</button>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-title">② 蒸馏结果</div>
+          <div class="distill-log" id="dist-log"></div>
+          <pre class="distill-result" id="dist-result" hidden></pre>
+          <div class="distill-saved" id="dist-saved" hidden></div>
+        </div>
+        <div class="panel">
+          <div class="panel-title">③ AI 问答（随时向 AI 提问，AI 基于所选技能回答）</div>
+          <div class="chat-pick">
+            <select id="chat-skill"><option value="">选择已蒸馏的技能…</option></select>
+            <span class="chat-pick-note" id="chat-pick-note"></span>
+          </div>
+          <div class="chat-box" id="chat-box">
+            <div class="chat-msg bot">选择上方技能后，在这里提问。AI 会基于该技能的知识回答你。</div>
+          </div>
+          <div class="chat-input-row">
+            <input id="chat-input" type="text" placeholder="输入你的问题，按回车发送…" />
+            <button class="btn primary" id="chat-send">发送</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 设置 -->
+    <section id="page-settings" class="page" hidden>
+      <header class="page-head settings-head">
+        <div>
+          <h1>设置</h1>
+          <p class="sub">项目、AI 与抖音登录配置</p>
+        </div>
+        <div class="settings-head-actions">
+          <span class="settings-status" id="settings-status"></span>
+          <button class="btn primary btn-confirm" id="btn-settings-save">确认修改 · 应用全部设置</button>
+        </div>
+      </header>
+      <div class="settings-grid">
+        <div class="panel">
+          <div class="panel-title">使用说明书</div>
+          <details class="help-block" open>
+            <summary>📖 这个软件是干什么的？</summary>
+            <div class="help-body">
+              <p>这是一个<b>抖音收藏 → 个人知识库</b>自动化工具。你收藏的抖音视频会自动：下载 → 本地语音转文字（Whisper，无需联网）→ 交给 AI 提炼知识 → 自动分类归档到 Obsidian 知识库 → 生成笔记、观点印证、知识卡片与日报。</p>
+              <p>全程在你自己的电脑上运行，笔记和数据都存在本地知识库文件夹里，不依赖别人。</p>
+            </div>
+          </details>
+          <details class="help-block">
+            <summary>✨ 项目亮点</summary>
+            <div class="help-body">
+              <ul>
+                <li><b>智能识别视频类型</b>：自动分辨广告、短剧、搞笑、音乐（唱歌/演奏）、舞蹈、才艺表演、纯画面（萌宠/风景大片）、吃播等娱乐类视频，直接跳过不写笔记，不浪费 token、不占用空间，也不会反复重试；美食制作教程、探店测评等有信息量的内容正常整理。</li>
+                <li><b>自动分类整理</b>：AI 按内容自动归档成「大分类 → 主题 → 具体子类」三级结构，同类视频自动聚在一起，无需手工整理。</li>
+                <li><b>观点印证文档</b>：同一个观点在多个视频里互相印证或补充时，会自动汇总进分类下置顶的「00-共识观点」文档——多来源互相验证的信息更可信，一眼看到重点。</li>
+                <li><b>蒸馏成技能包</b>：把某个子类的笔记用仓颉七阶段流水线"蒸馏"成可复用的技能文档，之后还能直接对蒸馏结果 AI 提问。</li>
+                <li><b>知识卡片</b>：按大分类提炼「互相印证的观点 + 单视频知识」，生成思维导图、印证网络、速查表，快速掌握一个主题。</li>
+                <li><b>全自动增量更新</b>：每天定时只处理「昨天新收藏 + 昨天失败」的视频，不重复处理历史内容，今天收藏的明天自动整理。</li>
+                <li><b>完全本地</b>：笔记写进本机 Obsidian 知识库，转录用本地 Whisper（不联网、免费），AI 提取才按需调用你的 API Key。</li>
+              </ul>
+            </div>
+          </details>
+          <details class="help-block">
+            <summary>🚀 快速上手（基本流程）</summary>
+            <div class="help-body">
+              <ol>
+                <li><b>配置 API Key</b>：在下方「AI 接口配置」里填 Base URL、Key 和模型名（任意 OpenAI 兼容接口，DeepSeek/Kimi/OpenAI 都行），然后点设置页右上角「确认修改 · 应用全部设置」。</li>
+                <li><b>登录抖音</b>：在「抖音账号」面板点「打开抖音扫码登录」，用手机扫码。</li>
+                <li><b>开始处理收藏</b>：切到「总览」页，点「开始处理收藏」。第一次会让你选择起始日期——只处理某天之后新增收藏的视频，也可以选「处理所有收藏视频」。</li>
+                <li><b>等待整理</b>：软件会逐条下载、转录、提炼并写笔记，进度在总览进度条和流水线面板实时显示。</li>
+                <li><b>看结果</b>：处理完去「知识库」页看笔记（按大分类 → 父类 → 子类归档）；去「知识卡片」页看 AI 提炼的印证观点、思维导图、速查表。</li>
+                <li><b>每日自动更新</b>：在设置里配好「定时任务」，每天早上自动处理<b>昨天新收藏 + 昨天失败</b>的视频（需电脑开机；较早历史收藏已在归档时跳过，不重复处理）。</li>
+              </ol>
+            </div>
+          </details>
+          <details class="help-block">
+            <summary>🔑 一定要用 API Key 吗？</summary>
+            <div class="help-body">
+              <p><b>要的。</b>视频转录后的「知识提取」「观点印证」「知识卡片」「AI 问答」都需要调用云端大模型，因此必须配置一个 OpenAI 兼容接口的 API Key：</p>
+              <ul>
+                <li>在「AI 接口配置」填 <b>Base URL</b>（如 DeepSeek 的 <code>https://api.deepseek.com/v1</code>）、<b>API Key</b>（在对应平台官网申请）、<b>模型名</b>（如 <code>deepseek-chat</code>）。</li>
+                <li>Key 只存在你自己电脑的设置文件里，不会上传到别处。</li>
+                <li>转录本身是<b>本地免费</b>的（Whisper），不需要网络；只有 AI 提炼那一步消耗 token，按各平台自己的价格计费。</li>
+              </ul>
+            </div>
+          </details>
+          <details class="help-block">
+            <summary>🔒 收藏是怎么获取的？有风控风险吗？</summary>
+            <div class="help-body">
+              <p><b>原理：</b>用你自己登录的抖音账号，通过网页版接口<b>直接读取你的「我的收藏」列表</b>（只读你自己的数据，不碰别人的内容），拿到每个视频的播放地址后下载到本地处理。整个过程是 API 直连，<b>不是模拟浏览器点击</b>，也不会代替你发布、点赞、评论任何内容。</p>
+              <p><b>风控说明：</b>抖音对接口调用有频率限制，任何第三方工具都存在被限流的理论风险。实际会遇到的情况和处理方式：</p>
+              <ul>
+                <li><b>拉取太频繁会被临时限流</b>：接口会提示稍后再试，等几分钟自动恢复，不会永久封禁。</li>
+                <li><b>播放地址约 2 小时过期</b>：过期后下载会报 403，软件已内置「地址自动保鲜」，批量处理时定时重新刷新。</li>
+                <li><b>登录态可能失效</b>：失效后到设置页重新扫码即可，无需重装任何东西。</li>
+                <li>软件默认<b>增量拉取</b>：每天只拉新增收藏，不反复全量请求，频率很低。</li>
+              </ul>
+              <p><b>建议：</b>正常个人使用风险很低；避免短时间反复全量拉取、遇到限流提示就停一会儿。如担心账号安全，可先用小号或减少使用频率观察。</p>
+            </div>
+          </details>
+          <details class="help-block">
+            <summary>🧩 各页面是干嘛的？</summary>
+            <div class="help-body">
+              <ul>
+                <li><b>总览</b>：一键开始/暂停处理收藏，查看首次处理进度、还剩多少条没处理。</li>
+                <li><b>新增收藏</b>：核对最近新收藏的视频，漏掉的可以粘贴视频链接手动补进来。</li>
+                <li><b>知识库</b>：按「大分类 → 主题 → 具体子类」浏览全部笔记，支持全文搜索、编辑笔记、分类管理、知识图谱。</li>
+                <li><b>语义检索</b>：不翻目录，直接输入关键词全局搜索所有笔记，命中内容高亮显示。</li>
+                <li><b>流水线</b>：查看本次同步的运行进度（处理率）与实时日志，随时掌握处理状态。</li>
+                <li><b>我的技能</b>：管理已蒸馏好的技能包，查看技能详情，选择技能后配合 AI 问答使用。</li>
+                <li><b>知识卡片</b>：AI 按大分类提炼「互相印证的观点 + 单视频知识」，生成思维导图、印证网络和速查表；视频不足 50 条的分类自动跳过。</li>
+                <li><b>止损看板</b>：集中查看处理失败与自动跳过（广告/短剧/搞笑等）的视频清单，快速定位问题。</li>
+                <li><b>知识蒸馏与 AI 问答</b>：把某个子类的笔记用仓颉七阶段流水线"蒸馏"成可复用的技能包；选定技能后可以直接向 AI 提问。</li>
+                <li><b>设置</b>：项目路径、AI 接口、抖音登录、皮肤、定时任务、每周知识周报都在这里。</li>
+              </ul>
+            </div>
+          </details>
+          <details class="help-block">
+            <summary>❓ 常见问题</summary>
+            <div class="help-body">
+              <ul>
+                <li><b>抖音登录失效了？</b>到「抖音账号」点「打开抖音扫码登录」重新扫码即可。</li>
+                <li><b>下载视频报 403？</b>视频地址有时效（约 2 小时），自动刷新失败时重新登录抖音后重跑即可。</li>
+                <li><b>广告/短剧/搞笑/音乐（唱歌、演奏）/舞蹈/才艺表演/纯画面（萌宠、风景大片）/吃播</b>会被自动识别并跳过，不写笔记、不重复处理；美食制作教程、探店测评等有信息量的内容会正常整理。</li>
+                <li><b>处理完的视频会占空间吗？</b>不会，转录并生成笔记后，软件会立即删除下载的视频文件。</li>
+                <li><b>定时任务没跑？</b>定时任务需要电脑开机且处于登录状态；错过的时间会在下次开机后自动补跑。</li>
+                <li><b>想改接口/换模型？</b>直接在「AI 接口配置」改后保存，之后所有 AI 功能（含定时任务）都会用新配置。</li>
+                <li><b>起始日期到底按什么时间？</b>抖音接口<b>不提供"你收藏这个视频的时刻"</b>。本软件以<b>视频的发布时间</b>作为判断依据：起始日期筛选的是<b>视频发布时间在该日期之后</b>的收藏，更早的永久跳过（可在设置里改日期或勾选「处理所有收藏视频」恢复）。</li>
+                <li><b>起始日期改了会怎样？</b>设置新日期会恢复旧标记并按新日期重新打标；勾选「处理所有收藏视频」则清空日期限制，全部收藏重新进入处理。</li>
+              </ul>
+            </div>
+          </details>
+        </div>
+        <div class="panel">
+          <div class="panel-title">项目配置 <span class="save-hint">改完记得点右上角「确认修改」才生效</span></div>
+          <label>项目路径（douyin-obsidian-knowledge 目录）
+            <input id="set-project" type="text" />
+          </label>
+          <label>知识库路径（Vault）
+            <input id="set-vault" type="text" />
+          </label>
+          <label>处理方式（首次打开应用，您希望直接把您的收藏全部跑一遍（可能会耗费较长时间）？还是处理发布比较新的视频（可以选择按时间处理）？还是处理最近收藏的视频（可以选择按数量处理））
+            <span class="mode-row">
+              <label class="mode-opt"><input type="radio" name="process-mode" value="time" id="set-mode-time" /> 按时间：只处理视频发布时间在起始日期之后的收藏视频</label>
+              <label class="mode-opt"><input type="radio" name="process-mode" value="count" id="set-mode-count" /> 按数量：只处理从目前往后数 N 条收藏（快照在保存时定好，之后新收藏不计入这 N 条）</label>
+              <label class="mode-opt"><input type="radio" name="process-mode" value="all" id="set-mode-all" /> 处理全部：把所有收藏从头跑一遍（历史存量全处理，可能较久）</label>
+            </span>
+          </label>
+          <div id="mode-time-block">
+            <label>起始日期（只处理视频发布时间在该日期之后的收藏视频，更早的永久跳过；留空表示不限。注：抖音不提供精确收藏时刻，以视频的发布时间为准）
+              <input id="set-startdate" type="date" />
+            </label>
+          </div>
+          <div id="mode-count-block" style="display:none;">
+            <label>确认条数（从目前往后数 N 条收藏，保存时锁定快照；建议按需填写，例如最近 100 条）
+              <input id="set-countlimit" type="number" min="1" max="10000" step="1" placeholder="例如 100" />
+            </label>
+          </div>
+          <label>每日处理条数（不含定时任务：仅限制在总览手动「开始处理收藏」时每次最多处理多少条；定时任务每天 500 条上限不受此影响）
+            <input id="set-dailylimit" type="number" min="1" max="3000" step="1" placeholder="默认 100" />
+          </label>
+          <label>Node 路径
+            <input id="set-node" type="text" />
+          </label>
+          <label>Whisper 模型
+            <input id="set-whisper" type="text" />
+          </label>
+          <label>仓颉路径（cangjie-skill 目录，蒸馏引擎）
+            <input id="set-cangjie" type="text" />
+          </label>
+          <label>Python 路径（含 PyYAML，用于仓颉编译）
+            <input id="set-python" type="text" />
+          </label>
+        </div>
+        <div class="panel">
+          <div class="panel-title">AI 接口配置（OpenAI 兼容）</div>
+          <label>API Base URL（支持 DeepSeek / OpenAI / Kimi / 通义等任何 OpenAI 兼容接口）
+            <input id="set-base" type="text" />
+          </label>
+          <label>API Key（仅存本机，用于云端提取与 AI 问答）
+            <input id="set-key" type="password" />
+          </label>
+          <label>模型名（如 deepseek-chat / gpt-4o-mini / kimi 等）
+            <input id="set-model" type="text" />
+          </label>
+          <div class="llm-test-row">
+            <button class="btn" id="btn-test-llm">测试连接</button>
+            <span id="llm-test-result" class="hint"></span>
+          </div>
+          <label>蒸馏技能输出目录
+            <input id="set-distill" type="text" />
+          </label>
+        </div>
+        <div class="panel">
+          <div class="panel-title">抖音账号</div>
+          <div class="login-card">
+            <div class="login-status" id="login-status">未检查</div>
+            <p class="hint">登录用于采集收藏与刷新视频地址。点击后会在采集专用浏览器窗口打开扫码页。</p>
+            <div class="login-actions">
+              <button class="btn primary" id="btn-login">打开抖音扫码登录</button>
+              <button class="btn" id="btn-auth-status">检查登录状态</button>
+            </div>
+            <div class="login-out" id="login-out"></div>
+          </div>
+        </div>
+        <div class="panel skin-panel">
+          <div class="panel-title">界面皮肤</div>
+          <p class="hint">选择背景风景壁纸，切换后立即生效并记住你的选择。</p>
+          <div id="skin-grid" class="skin-grid"></div>
+        </div>
+        <div class="panel material-panel" id="material-panel" hidden>
+          <div class="panel-title">界面材质 <span class="vip-badge-tag">隐藏彩蛋</span></div>
+          <p class="hint">🎉 你集齐了全部 12 枚成就徽章，解锁了这个隐藏彩蛋：给界面里的面板与卡片选一种质感——毛玻璃、亚克力、云母或 3D 立体，切换后立即生效。</p>
+          <div id="material-grid" class="material-grid"></div>
+        </div>
+        <div class="panel motion-panel" id="motion-panel" hidden>
+          <div class="panel-title">界面动效 <span class="vip-badge-tag">隐藏彩蛋</span></div>
+          <p class="hint">🎉 你集齐了全部 12 枚成就徽章，解锁了这个隐藏彩蛋：选一款喜欢的点击特效——星光、涟漪、光点、星芒。下方还有各主题专属特效，切换对应主题即可自动启用。</p>
+          <div class="motion-grid" id="motion-grid"></div>
+          <div class="motion-toggle-list" id="motion-toggle-list"></div>
+          <div class="motion-divider">
+            <span>皮肤专属特效 <span class="vip-badge-tag">换主题即换特效</span></span>
+            <span class="motion-divider-spacer"></span>
+            <span class="motion-divider-label">开启专属</span>
+            <label class="switch"><input type="checkbox" id="skin-fx-toggle"><span class="slider"></span></label>
+          </div>
+          <p class="hint">开启后，点击特效会优先使用当前主题的专属粒子（太阳、云朵、落叶、雪花、火星、星光等）；关闭则使用上方选择的通用特效。</p>
+          <div class="motion-skinfx" id="motion-skinfx"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-title">定时任务</div>
+          <div class="sched-settings" id="sched-settings">
+            <div class="sched-status-line" id="sched-installed">检测中…</div>
+            <label>每日同步时间（时:分，24 小时制）
+              <input id="sched-time" type="time" value="08:00" />
+            </label>
+            <div class="sched-actions">
+              <button class="btn primary" id="btn-sched-set">更新时间</button>
+              <button class="btn" id="btn-sched-enable">启用</button>
+              <button class="btn" id="btn-sched-disable">停用</button>
+            </div>
+            <div class="sched-hint">定时任务每天指定时间自动 采集→转录→提取→归档→日报，只处理<b>昨天新增的收藏 + 昨天失败的收藏</b>（今天新增明天处理，较早历史收藏已归档跳过）；<b style="color:#fbbf24">⚠ 电脑需开机且已登录账号，否则当天任务不会执行</b>。若上次运行失败或锁残留会在这里显示。</div>
+            <pre class="sched-log" id="sched-log"></pre>
+          </div>
+        </div>
+        <div class="panel" id="weekly-panel">
+          <div class="panel-title">每周知识周报 <span class="vip-badge-tag" id="weekly-vip-tag">完整版会员专属</span></div>
+          <div id="weekly-panel-body">
+            <label class="check-row">
+              <input id="wr-enable" type="checkbox" />
+              启用每周知识周报（在设定星期当天首次打开软件时自动弹出）
+            </label>
+            <label>周报星期（当天首次打开软件时自动弹出，一天只弹一次）
+              <select id="wr-weekday">
+                <option value="1">周一</option>
+                <option value="2">周二</option>
+                <option value="3">周三</option>
+                <option value="4">周四</option>
+                <option value="5">周五</option>
+                <option value="6">周六</option>
+                <option value="7">周日</option>
+              </select>
+            </label>
+            <div class="weekly-view-row">
+              <button class="btn" id="btn-weekly-view">查看本周周报</button>
+              <span class="hint" style="margin:0">每周自动生成收藏统计报告，新的一周自动替换，旧周报不保留。</span>
+            </div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-title">处理与资源</div>
+          <label>暂停后空闲自动恢复（分钟，0=关闭）：任务暂停后，电脑空闲超过该分钟数会自动继续；0 表示只手动继续
+            <input id="set-pause-auto" type="number" min="0" max="600" step="1" placeholder="0 = 关闭（只手动恢复）" />
+          </label>
+          <div class="cleanup-row">
+            <button class="btn" id="btn-cleanup-media">清理临时媒体文件</button>
+            <span class="pause-status" id="cleanup-status"></span>
+            <p class="hint">删除下载过但未清理的临时视频文件（var\media 残留），释放磁盘空间；检测到同步任务正在运行时会拒绝，请先暂停或等任务结束。</p>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-title">建议与反馈</div>
+          <p class="hint">使用中遇到问题、有功能想法或想吐槽，欢迎随时联系：</p>
+          <div class="feedback-card">
+            <div class="feedback-mail">📮 <a href="mailto:eason660880@qq.com">eason660880@qq.com</a></div>
+            <p class="hint">点邮箱即可直接发邮件。反馈时如果能附上<b>问题截图 + 当时操作的步骤描述</b>，会更快帮你定位问题。</p>
+          </div>
+        </div>
+        <div class="panel" id="vip-panel">
+          <div class="panel-title">支持作者</div>
+          <p class="hint vip-support-text">如果你觉得软件确实对你有帮助，可以打赏任意金额给作者，感谢支持。所有功能永久免费使用。</p>
+          <div class="vip-hint" id="vip-hint"></div>
+          <div class="vip-fonts-title">字体大小 <span class="vip-fonts-state" id="fs-state">默认 14</span></div>
+          <div class="fs-row">
+            <span class="fs-tag">小</span>
+            <input id="fs-range" type="range" min="12" max="18" step="1" />
+            <span class="fs-tag">大</span>
+            <span class="fs-val" id="fs-val">14</span>
+            <button class="btn small" id="fs-reset">重置</button>
+          </div>
+          <div class="vip-hint" id="fs-hint"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-title">打赏作者</div>
+          <p class="hint">如果这个工具帮到了你，欢迎请作者喝点东西。点金额按钮会弹出对应的固定金额收款码，微信扫码即可付款。谢谢您的支持。</p>
+          <div class="donate-amounts">
+            <button class="btn donate-btn" data-amt="3.33" data-label="一杯可乐">3.33 · 一杯可乐</button>
+            <button class="btn donate-btn" data-amt="6.66" data-label="一杯奶茶">6.66 · 一杯奶茶</button>
+            <button class="btn donate-btn" data-amt="8.88" data-label="一个鸡腿">8.88 · 一个鸡腿</button>
+            <button class="btn donate-btn" data-amt="16.88" data-label="一顿午饭">16.88 · 一顿午饭</button>
+          </div>
+          <div class="donate-hint" id="donate-hint"></div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- 日志侧滑面板 -->
+  <div id="log-panel" hidden>
+    <div class="log-head">
+      <span>运行日志</span>
+      <button id="btn-log-close">×</button>
+    </div>
+    <pre id="log-body"></pre>
+  </div>
+</div>
+<script src="vendor/d3.min.js"></script>
+<script src="app.js"></script>
+  <!-- 打赏弹窗 -->
+  <div id="donate-modal" class="cat-modal" hidden>
+    <div class="cat-modal-box donate-modal-box">
+      <div class="cat-modal-head">
+        <h3 id="donate-modal-title">微信打赏</h3>
+        <button class="cat-modal-x" id="donate-modal-x" title="关闭">✕</button>
+      </div>
+      <img id="donate-modal-img" class="donate-modal-img" src="../assets/donate/wechat-qr.jpg" alt="微信收款码"/>
+      <p id="donate-modal-amt" class="donate-modal-amt"></p>
+      <button class="btn" id="donate-modal-copy">复制打赏提示</button>
+    </div>
+  </div>
+  <!-- 分类管理弹窗 -->
+  <div id="cat-modal" class="cat-modal" hidden>
+    <div class="cat-modal-box">
+      <div class="cat-modal-head">
+        <h3 id="cat-modal-title">分类管理</h3>
+        <button class="cat-modal-x" id="cat-modal-x" title="关闭">✕</button>
+      </div>
+      <p id="cat-modal-hint" class="cat-modal-hint"></p>
+      <div id="cat-modal-form"></div>
+      <div class="cat-modal-actions">
+        <button class="btn ghost" id="cat-modal-cancel">取消</button>
+        <button class="btn" id="cat-modal-ok">确定</button>
+      </div>
+    </div>
+  </div>
+  <!-- 每周知识周报弹窗 -->
+  <div id="weekly-modal" class="cat-modal" hidden>
+    <div class="cat-modal-box weekly-modal-box">
+      <div class="cat-modal-head">
+        <h3 id="weekly-modal-title">📊 每周知识周报</h3>
+        <button class="cat-modal-x" id="weekly-modal-x" title="关闭">✕</button>
+      </div>
+      <div id="weekly-modal-body"></div>
+      <div class="cat-modal-actions">
+        <button class="btn primary" id="weekly-modal-ok">收下这份周报</button>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

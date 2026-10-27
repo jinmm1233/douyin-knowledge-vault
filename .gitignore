@@ -1,0 +1,9 @@
+node_modules/
+build-runtime/
+release/
+*.exe
+*.zip
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
