@@ -585,6 +585,14 @@ function parseLastJson(text) {
       if (parsed && typeof parsed === "object") return parsed;
     } catch {}
   }
+  // 多行缩进输出的 JSON（如 skipped --list / --show）：从后往前找 "{"/"[" 起点，拼到结尾再解析
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    if (!(lines[i].startsWith("{") || lines[i].startsWith("["))) continue;
+    try {
+      const parsed = JSON.parse(lines.slice(i).join("\n"));
+      if (parsed && typeof parsed === "object") return parsed;
+    } catch {}
+  }
   return {};
 }
 
@@ -1565,8 +1573,20 @@ ipcMain.handle("weekly:aiDirection", async (_e, settings, data) => {
 });
 
 // ---- 止损看板：失败清单文件列表 ----
-ipcMain.handle("failures:list", (_e, settings) => {
-  const roots = [path.join(settings.projectPath, "var"), settings.projectPath];
+ipcMain.handle("failures:list", async (_e, settings) => {
+  const s = settings || loadSettings();
+  // 先按当前数据库重新生成当日清单（旧版只有读取端、没有写入端，面板永远显示"还没有失败清单文件"）
+  await new Promise((resolve) => {
+    const timer = setTimeout(resolve, 10000);
+    try {
+      runCli(s, ["failreport"], {
+        onOut: () => {},
+        onDone: () => { clearTimeout(timer); resolve(); },
+        onError: () => { clearTimeout(timer); resolve(); },
+      });
+    } catch { clearTimeout(timer); resolve(); }
+  });
+  const roots = [path.join(s.projectPath, "var"), s.projectPath];
   const seen = new Set();
   const out = [];
   for (const dir of roots) {
@@ -1585,21 +1605,108 @@ ipcMain.handle("failures:list", (_e, settings) => {
   return { ok: true, files: out };
 });
 
-// ---- 被"内容类型"跳过的条目：列出 / 一键恢复（用已提取的知识补笔记，不重复花 AI） ----
+// ---- 被跳过的条目：列出（含中文原因）/ 补笔记 / 重新处理 ----
+// 止损看板是给用户看的，不是运行日志：英文技术报错先由 CLI 的固定词典翻成中文，
+// 词典没覆盖的在这里调一次 AI 翻成人话，结果缓存到 var/reason-zh-cache.json（不重复花钱）。
+function reasonZhCacheFile(settings) {
+  return path.join(settings.projectPath, "var", "reason-zh-cache.json");
+}
+function readReasonZhCache(settings) {
+  try {
+    return JSON.parse(fs.readFileSync(reasonZhCacheFile(settings), "utf8")) || {};
+  } catch {
+    return {};
+  }
+}
+function writeReasonZhCache(settings, cache) {
+  try {
+    fs.mkdirSync(path.dirname(reasonZhCacheFile(settings)), { recursive: true });
+    fs.writeFileSync(reasonZhCacheFile(settings), JSON.stringify(cache, null, 2), "utf8");
+  } catch { /* ignore */ }
+}
+
+async function aiTranslateReasons(settings, texts) {
+  const list = Array.from(new Set((texts || []).map((t) => String(t || "").trim()).filter(Boolean))).slice(0, 20);
+  if (!list.length) return {};
+  const envBase = process.env.DOK_LLM_BASE_URL || "";
+  const envKey = process.env.DOK_LLM_API_KEY || "";
+  const base = String(settings.llmBaseUrl || envBase || "").replace(/\/+$/, "");
+  const apiKey = settings.llmApiKey || envKey;
+  if (!base || !apiKey) return {};
+  const system = [
+    "你是一个给普通用户解释软件内部错误的助手。用户不懂编程，看到英文报错完全不知道发生了什么。",
+    "把下面这些技术报错翻成通俗中文：一句话说清「出了什么事」，必要时补一句「为什么会这样」。",
+    "要求：20~45 字；口语化；不要出现代码、堆栈、英文术语；不要加序号和引号；不要 Markdown。",
+    '严格只输出一个 JSON 对象，形如 {"原文":"中文解释"}，键必须与输入的原文逐字一致。',
+  ].join("");
+  const model = settings.llmModel || "deepseek-chat";
+  try {
+    const resp = await fetch(`${base}/chat/completions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: "system", content: system }, { role: "user", content: JSON.stringify(list) }],
+        temperature: 0.2,
+        max_tokens: 800,
+      }),
+    });
+    if (!resp.ok) return {};
+    const data = await resp.json();
+    recordApiUsage(data);
+    const content = String((data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) || "");
+    const start = content.indexOf("{");
+    const end = content.lastIndexOf("}");
+    if (start < 0 || end <= start) return {};
+    const parsed = JSON.parse(content.slice(start, end + 1));
+    const out = {};
+    for (const [k, v] of Object.entries(parsed)) {
+      if (typeof v === "string" && v.trim() && /[\u4e00-\u9fa5]/.test(v)) out[String(k).trim()] = v.trim();
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
 ipcMain.handle("skipped:list", async (_e, settings) => {
   const s = settings || loadSettings();
-  return await new Promise((resolve) => {
+  const result = await new Promise((resolve) => {
     let out = "";
     runCli(s, ["skipped", "--list", "--limit", "300"], {
       onOut: (chunk) => { out += chunk; },
       onDone: (code) => {
         const parsed = parseLastJson(out);
-        if (code === 0 && parsed && parsed.ok) resolve({ ok: true, items: parsed.items || [], total: parsed.total || 0 });
+        if (code === 0 && parsed && parsed.ok) resolve({ ok: true, items: parsed.items || [], total: parsed.total || 0, counts: parsed.counts || {} });
         else resolve({ ok: false, error: parsed && parsed.error || "读取跳过清单失败", raw: out.slice(-400) });
       },
       onError: (err) => resolve({ ok: false, error: String(err) }),
     });
   });
+  if (!result.ok) return result;
+  // 词典没翻出来的英文报错，交给 AI 补译（只翻没缓存的，结果落盘复用）
+  try {
+    const cache = readReasonZhCache(s);
+    const missing = [];
+    for (const it of result.items || []) {
+      if (it.reasonKind === "content" || !it.reasonText) continue;
+      if (it.reasonZh) continue;
+      if (/[\u4e00-\u9fa5]/.test(it.reasonText)) { it.reasonZh = it.reasonText; continue; }
+      if (cache[it.reasonText]) { it.reasonZh = cache[it.reasonText]; continue; }
+      missing.push(it.reasonText);
+    }
+    if (missing.length) {
+      const got = await aiTranslateReasons(s, missing);
+      if (Object.keys(got).length) {
+        Object.assign(cache, got);
+        writeReasonZhCache(s, cache);
+        for (const it of result.items || []) {
+          if (!it.reasonZh && it.reasonText && got[it.reasonText]) it.reasonZh = got[it.reasonText];
+        }
+      }
+    }
+  } catch { /* 翻译失败就显示原文，不影响清单展示 */ }
+  return result;
 });
 
 ipcMain.handle("skipped:restore", async (_e, settings, awemeIds) => {
@@ -1617,6 +1724,28 @@ ipcMain.handle("skipped:restore", async (_e, settings, awemeIds) => {
           resolve({ ok: true, restored: parsed.restored, okCount, failCount: parsed.restored.length - okCount });
         } else {
           resolve({ ok: false, error: parsed && parsed.error || "恢复失败", raw: out.slice(-400) });
+        }
+      },
+      onError: (err) => resolve({ ok: false, error: String(err) }),
+    });
+  });
+});
+
+ipcMain.handle("skipped:retry", async (_e, settings, awemeIds) => {
+  const s = settings || loadSettings();
+  const ids = (Array.isArray(awemeIds) ? awemeIds : [awemeIds]).map((id) => String(id || "").trim()).filter(Boolean);
+  if (!ids.length) return { ok: false, error: "没有选中要重新处理的视频" };
+  return await new Promise((resolve) => {
+    let out = "";
+    runCli(s, ["skipped", "--retry", ids.join(",")], {
+      onOut: (chunk) => { out += chunk; },
+      onDone: (code) => {
+        const parsed = parseLastJson(out);
+        if (code === 0 && parsed && Array.isArray(parsed.retried)) {
+          const okCount = parsed.retried.filter((r) => r.ok).length;
+          resolve({ ok: true, retried: parsed.retried, okCount, failCount: parsed.retried.length - okCount });
+        } else {
+          resolve({ ok: false, error: parsed && parsed.error || "重新处理失败", raw: out.slice(-400) });
         }
       },
       onError: (err) => resolve({ ok: false, error: String(err) }),
