@@ -337,13 +337,13 @@
     <section id="page-failures" class="page" hidden>
       <header class="page-head">
         <h1>止损看板</h1>
-        <p class="sub">处理失败视频清单 · 广告/短剧/搞笑等已跳过项</p>
+        <p class="sub">处理失败与所有被跳过项（含无音频、内容类型误判）· 按日归档</p>
       </header>
       <div class="panel" id="skip-panel">
-        <div class="panel-title">被跳过的视频（可能误判）
-          <span class="pull-right"><button class="btn small" id="btn-skip-refresh">刷新</button></span>
+        <div class="panel-title">被跳过的视频
+          <span class="pull-right"><span class="sched-hint" id="skip-summary"></span> <button class="btn small" id="btn-skip-refresh">刷新</button></span>
         </div>
-        <p class="hint">这些视频被 AI 判成了你在设置里勾选的跳过类型（如吃播）。AI 偶尔会判错，比如把<b>美食教程</b>当成吃播。现在已加保护：只要提取出了要点或步骤，就不会被跳过。下面这些历史记录可以点「恢复生成笔记」，<b>直接用已提取的内容补出笔记，不重新消耗 AI 额度</b>。</p>
+        <p class="hint">这里列出<b>所有不会再被自动处理</b>的视频，分四类：<b>内容类型跳过</b>（AI 判成广告/短剧/吃播等，偶尔会误判，比如把美食教程当成吃播）、<b>无法处理</b>（视频无音频、转录拿不到文字、内容过少等，已放弃不再重试）、<b>重试仍失败</b>、<b>早于起始日期</b>（被日期窗口归档）。<br>类型误判的可以点「恢复生成笔记」，<b>直接用已提取的内容补出笔记，不重新消耗 AI 额度</b>；其余的可以点「重新处理」，把它放回队列、下次「开始处理」时重跑一遍。</p>
         <div id="skip-list" class="skip-list"><div class="hint">加载中…</div></div>
       </div>
       <div class="fail-tools">
@@ -482,7 +482,7 @@
                 <li><b>流水线</b>：查看本次同步的运行进度（处理率）与实时日志，随时掌握处理状态。</li>
                 <li><b>我的技能</b>：管理已蒸馏好的技能包，查看技能详情，选择技能后配合 AI 问答使用。</li>
                 <li><b>知识卡片</b>：AI 按大分类提炼「互相印证的观点 + 单视频知识」，生成思维导图、印证网络和速查表；视频不足 50 条的分类自动跳过。</li>
-                <li><b>止损看板</b>：集中查看处理失败与自动跳过（广告/短剧/搞笑等）的视频清单，快速定位问题。</li>
+                <li><b>止损看板</b>：集中查看没处理成的视频——内容类型误判（广告/短剧/搞笑等）、无法处理（无音频、转录无文字）、重试仍失败、早于起始日期被归档，都能在这里看到原因并一键补笔记或重新处理。</li>
                 <li><b>知识蒸馏与 AI 问答</b>：把某个子类的笔记用仓颉七阶段流水线"蒸馏"成可复用的技能包；选定技能后可以直接向 AI 提问。</li>
                 <li><b>设置</b>：项目路径、AI 接口、抖音登录、皮肤、定时任务、每周知识周报都在这里。</li>
               </ul>
