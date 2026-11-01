@@ -1,6 +1,6 @@
 {
   "name": "douyin-knowledge-app",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "description": "抖音收藏 → Obsidian 知识库桌面版：采集、转录、知识提取、笔记浏览、仓颉蒸馏，开箱即用（内置 Python / Whisper / 仓颉）",
   "main": "main.js",
   "scripts": {
