@@ -161,9 +161,10 @@ contextBridge.exposeInMainWorld("api", {
   modelStatus: (settings) => ipcRenderer.invoke("model:status", settings),
   modelRepair: (settings) => ipcRenderer.invoke("model:repair", settings),
   modelOpenFolder: (settings) => ipcRenderer.invoke("model:open-folder", settings),
-  // 被"内容类型"跳过的视频（多为 AI 误判）：列出 / 一键恢复生成笔记
+  // 被跳过的视频（内容类型误判 / 无音频等永久失败 / 早于起始日期）：列出 / 补笔记 / 重新处理
   skippedList: (settings) => ipcRenderer.invoke("skipped:list", settings),
   skippedRestore: (settings, awemeIds) => ipcRenderer.invoke("skipped:restore", settings, awemeIds),
+  skippedRetry: (settings, awemeIds) => ipcRenderer.invoke("skipped:retry", settings, awemeIds),
   // 内置自动更新：状态 / 检查 / 下载 / 安装 + 事件推送
   updateStatus: (settings) => ipcRenderer.invoke("update:status", settings),
   updateCheck: (settings) => ipcRenderer.invoke("update:check", settings),
