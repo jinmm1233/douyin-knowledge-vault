@@ -11,10 +11,11 @@
 - 每周自动同步新增收藏，支持 Windows 开机自启定时任务
 - 8 款风景主题皮肤，液态玻璃 UI，全程本地运行
 - 内置 Python/Whisper/FFmpeg 运行时，双击安装包即可使用，无需额外配置环境
+- 内置自动更新：设置页填好仓库地址后，一键检查、下载、安装新版本
 
 ## 🚀 快速开始
 
-1. 去 [Releases](https://github.com/jinmm1233/douyin-knowledge-vault/releases) 下载最新的 `抖音知识库-Setup-1.0.0.exe`
+1. 去 [Releases](https://github.com/jinmm1233/douyin-knowledge-vault/releases) 下载最新的 `DouyinKnowledge-Setup-x.y.z.exe`
 2. 双击安装，打开软件
 3. 第一步：在设置里选好你的 Obsidian 知识库保存路径
 4. 第二步：填入你自己的 LLM API Key（DeepSeek 等 OpenAI 兼容接口）
