@@ -52,6 +52,13 @@
   <!-- 主内容 -->
   <main id="main">
 
+    <!-- 全局提示条：模型缺失 / 更新可下载等非阻塞提醒 -->
+    <div id="app-banner" class="app-banner" hidden>
+      <span id="app-banner-text"></span>
+      <button class="btn small primary" id="app-banner-action" hidden>去处理</button>
+      <button class="btn small ghost" id="app-banner-close">知道了</button>
+    </div>
+
     <!-- 总览 -->
     <section id="page-dashboard" class="page">
       <header class="page-head">
@@ -77,6 +84,8 @@
           <div class="quick-actions">
             <button class="btn primary" id="dash-process-one">处理 1 条</button>
             <button class="btn" id="dash-batch">批量 20 条</button>
+            <button class="btn" id="dash-pause">⏸ 暂停</button>
+            <button class="btn danger" id="dash-force-stop">⏹ 强制停止</button>
             <button class="btn ghost" id="dash-refresh">刷新统计</button>
           </div>
           <div class="hint">批量处理会自动 下载→转录→云端提取→归档，断网自动续跑。</div>
@@ -190,14 +199,19 @@
             <input id="kb-search" type="text" placeholder="全文搜索笔记…" />
             <button class="btn ghost" id="kb-search-btn">搜索</button>
           </div>
+          <button class="btn ghost" id="kb-recent-btn" title="按生成时间倒序查看最近生成的笔记">🕒 最新生成</button>
           <button class="btn" id="kb-graph-btn">图谱视图</button>
           <button class="btn ghost" id="kb-new-btn" title="在当前层级新建分类">＋ 新建</button>
         </div>
       </header>
+      <div class="kb-view-tabs">
+        <button class="kb-tab active" id="kb-tab-md">Markdown知识库</button>
+      </div>
       <div id="search-results" hidden></div>
       <div id="graph-view" hidden></div>
       <div class="kb-crumb" id="kb-crumb"></div>
       <div id="folder-grid" class="folder-grid kb-full"></div>
+      <div id="word-grid" class="folder-grid kb-full" hidden></div>
     </section>
 
     <!-- 全屏阅读器（位于所有页面之外，任何页面都可打开） -->
@@ -206,6 +220,7 @@
         <button class="btn small ghost" id="btn-reader-back">← 返回</button>
         <span class="reader-file" id="reader-file"></span>
         <span class="spacer"></span>
+        <button class="btn small" id="btn-highlight" title="调用 AI 给当前笔记的重点名词/关键词加粗（带防改写保护，不会改动原文）">✨ 智能划重点</button>
         <button class="btn small" id="btn-edit">编辑</button>
         <button class="btn small" id="btn-save" hidden>保存</button>
         <button class="btn small ghost" id="btn-cancel" hidden>取消</button>
@@ -249,8 +264,9 @@
           <div class="pause-row">
             <button class="btn" id="btn-pause">⏸ 暂停任务</button>
             <button class="btn primary" id="btn-resume" hidden>▶ 继续任务</button>
+            <button class="btn danger" id="btn-force-stop">⏹ 强制停止</button>
             <span class="pause-status" id="pause-status"></span>
-            <span class="sched-hint">暂停后会在当前视频处理完、下一条开始前停下；继续后自动接着跑（定时任务共用同一开关）。</span>
+            <span class="sched-hint">暂停：当前视频处理完、下一条开始前停下；继续后自动接着跑（定时任务共用同一开关）。强制停止：<b>立刻中断正在处理的视频</b>，会留下半截临时文件（下次处理会自动重新下载），已生成的笔记不受影响。</span>
           </div>
         </div>
       </div>
@@ -323,6 +339,13 @@
         <h1>止损看板</h1>
         <p class="sub">处理失败视频清单 · 广告/短剧/搞笑等已跳过项</p>
       </header>
+      <div class="panel" id="skip-panel">
+        <div class="panel-title">被跳过的视频（可能误判）
+          <span class="pull-right"><button class="btn small" id="btn-skip-refresh">刷新</button></span>
+        </div>
+        <p class="hint">这些视频被 AI 判成了你在设置里勾选的跳过类型（如吃播）。AI 偶尔会判错，比如把<b>美食教程</b>当成吃播。现在已加保护：只要提取出了要点或步骤，就不会被跳过。下面这些历史记录可以点「恢复生成笔记」，<b>直接用已提取的内容补出笔记，不重新消耗 AI 额度</b>。</p>
+        <div id="skip-list" class="skip-list"><div class="hint">加载中…</div></div>
+      </div>
       <div class="fail-tools">
         <select id="fail-file" class="kb-group-select"></select>
         <button class="btn" id="fail-refresh">刷新</button>
@@ -492,7 +515,7 @@
           <label>处理方式（首次打开应用，您希望直接把您的收藏全部跑一遍（可能会耗费较长时间）？还是处理发布比较新的视频（可以选择按时间处理）？还是处理最近收藏的视频（可以选择按数量处理））
             <span class="mode-row">
               <label class="mode-opt"><input type="radio" name="process-mode" value="time" id="set-mode-time" /> 按时间：只处理视频发布时间在起始日期之后的收藏视频</label>
-              <label class="mode-opt"><input type="radio" name="process-mode" value="count" id="set-mode-count" /> 按数量：只处理从目前往后数 N 条收藏（快照在保存时定好，之后新收藏不计入这 N 条）</label>
+              <label class="mode-opt"><input type="radio" name="process-mode" value="count" id="set-mode-count" /> 按数量：每次开始处理时，只处理<b>最近收藏的 N 条</b>（每次运行前自动刷新范围，刚采集到的新收藏也算进去；优先处理最新收藏的那几条）</label>
               <label class="mode-opt"><input type="radio" name="process-mode" value="all" id="set-mode-all" /> 处理全部：把所有收藏从头跑一遍（历史存量全处理，可能较久）</label>
             </span>
           </label>
@@ -502,10 +525,21 @@
             </label>
           </div>
           <div id="mode-count-block" style="display:none;">
-            <label>确认条数（从目前往后数 N 条收藏，保存时锁定快照；建议按需填写，例如最近 100 条）
+            <label>确认条数（每次开始处理时，取"最近收藏的 N 条"，优先处理其中最晚收藏的；建议按需填写，例如最近 100 条）
               <input id="set-countlimit" type="number" min="1" max="10000" step="1" placeholder="例如 100" />
             </label>
           </div>
+          <label>自动跳过内容类型（不勾选＝全部正常处理。短剧、纯音乐、舞蹈/才艺、搞笑段子：勾选后一律跳过；广告、纯吃播、纯风景：能提取出要点或步骤等实质内容就保留，避免教程被误判。跳过的视频可在「止损看板」恢复）</label>
+            <div class="skip-check-grid">
+              <label class="skip-opt"><input type="checkbox" name="skip-cat" value="shortdrama" /> 短剧/连载短剧</label>
+              <label class="skip-opt"><input type="checkbox" name="skip-cat" value="ad" /> 广告/推广带货</label>
+              <label class="skip-opt"><input type="checkbox" name="skip-cat" value="music" /> 纯音乐/唱歌/演奏</label>
+              <label class="skip-opt"><input type="checkbox" name="skip-cat" value="dance" /> 舞蹈/才艺表演</label>
+              <label class="skip-opt"><input type="checkbox" name="skip-cat" value="funny" /> 搞笑段子/无干货娱乐</label>
+              <label class="skip-opt"><input type="checkbox" name="skip-cat" value="mukbang" /> 纯吃播/无教程美食</label>
+              <label class="skip-opt"><input type="checkbox" name="skip-cat" value="silent-no-info" /> 纯风景/萌宠无文字画面</label>
+            </div>
+          </label>
           <label>每日处理条数（不含定时任务：仅限制在总览手动「开始处理收藏」时每次最多处理多少条；定时任务每天 500 条上限不受此影响）
             <input id="set-dailylimit" type="number" min="1" max="3000" step="1" placeholder="默认 100" />
           </label>
@@ -552,6 +586,58 @@
             </div>
             <div class="login-out" id="login-out"></div>
           </div>
+        </div>
+        <div class="panel" id="browser-panel">
+          <div class="panel-title">登录与浏览器</div>
+          <p class="hint">登录抖音要弹一个浏览器窗口扫码。如果窗口弹不出来、一闪就退、或者提示 <code>no supported browser</code>，就在这里换一种浏览器再试。</p>
+          <label class="radio-row"><input type="radio" name="browser-mode" id="bm-auto" value="auto" /> 自动（推荐）：先用内置浏览器，失败自动换本机浏览器</label>
+          <label class="radio-row"><input type="radio" name="browser-mode" id="bm-builtin" value="builtin" /> 只用内置浏览器（不依赖电脑上的 Chrome/Edge）</label>
+          <label class="radio-row"><input type="radio" name="browser-mode" id="bm-system" value="system" /> 只用本机浏览器（Chrome / Edge）</label>
+          <label class="check-row"><input id="browser-proxy-direct" type="checkbox" /> 绕过系统代理（抖音页面打不开、或报 ERR_PROXY_CONNECTION_FAILED 时勾上）</label>
+          <div class="cleanup-row">
+            <button class="btn" id="btn-browser-diagnose">检测可用浏览器</button>
+            <button class="btn ghost" id="btn-browser-reset">重置登录浏览器缓存</button>
+            <span class="hint" style="margin:0">换浏览器后要重新扫码登录一次（登录态按浏览器分别保存）</span>
+          </div>
+          <pre class="sched-log" id="browser-diag-log"></pre>
+          <p class="hint">💡 如果第一次登录时 Windows 弹出「是否允许应用通过防火墙」，点<b>允许访问</b>（只勾「专用网络」也行）。点取消一般还能联网，但个别网络环境会被当成受限连接，导致页面打不开。</p>
+        </div>
+        <div class="panel" id="model-panel">
+          <div class="panel-title">转录模型（Whisper）</div>
+          <div class="sched-status-line" id="model-status-line">检测中…</div>
+          <p class="hint">模型约 465MB。下载中断、被杀毒软件隔离、或者网速太慢没下完时，这里会自动发现「模型不完整」，点一下就能重新下载并逐个校验文件大小。</p>
+          <label>模型下载源
+            <select id="model-endpoint">
+              <option value="mirror">国内镜像 hf-mirror.com（推荐，速度快）</option>
+              <option value="official">HuggingFace 官方（镜像不可用时再换）</option>
+            </select>
+          </label>
+          <div class="cleanup-row">
+            <button class="btn primary" id="btn-model-repair">重新检测并下载模型</button>
+            <button class="btn" id="btn-model-open">打开模型目录</button>
+            <span class="pause-status" id="model-repair-status"></span>
+          </div>
+          <pre class="sched-log" id="model-log"></pre>
+        </div>
+        <div class="panel" id="update-panel">
+          <div class="panel-title">软件更新</div>
+          <div class="sched-status-line" id="update-version">当前版本读取中…</div>
+          <label>更新源 · GitHub 仓库（owner/仓库名）
+            <input id="update-repo" placeholder="例如 eason/douyin-knowledge-app" />
+          </label>
+          <label>更新源 · 直链目录（可选，填了优先用直链，不用 GitHub）
+            <input id="update-feed-url" placeholder="例如 https://example.com/douyin-updates/" />
+          </label>
+          <label class="check-row"><input id="update-auto-check" type="checkbox" /> 启动时后台自动检查新版本（只提示，不强制更新）</label>
+          <div class="cleanup-row">
+            <button class="btn" id="btn-update-save">保存更新设置</button>
+            <button class="btn primary" id="btn-update-check">检查更新</button>
+            <button class="btn" id="btn-update-download" hidden>开始下载</button>
+            <button class="btn primary" id="btn-update-install" hidden>立即重启安装</button>
+          </div>
+          <div class="bar-track" style="margin-top:10px"><div class="bar-fill" id="update-bar"></div></div>
+          <div class="hint" id="update-status-text" style="margin-top:6px">未检查</div>
+          <div class="hint" id="update-notes" hidden></div>
         </div>
         <div class="panel skin-panel">
           <div class="panel-title">界面皮肤</div>
@@ -613,8 +699,12 @@
             </label>
             <div class="weekly-view-row">
               <button class="btn" id="btn-weekly-view">查看本周周报</button>
-              <span class="hint" style="margin:0">每周自动生成收藏统计报告，新的一周自动替换，旧周报不保留。</span>
+              <span class="hint" style="margin:0">基础版所有用户可用；会员解锁词云、本周洞察、本周小结与成就徽章。新的一周自动替换，旧周报不保留。</span>
             </div>
+            <div class="weekly-panel-badges-title">成就徽章 <span class="hint" id="wr-badges-count"></span></div>
+            <div class="weekly-badges" id="wr-badges"></div>
+            <div class="weekly-badges-locked" id="wr-badges-locked" hidden>🔒 成就徽章为会员专属，开通会员后在此查看全部 12 枚徽章进度</div>
+            <div class="weekly-author-note">💬 作者说：解锁全部 12 枚成就会有意想不到的惊喜小彩蛋，加油吧！</div>
           </div>
         </div>
         <div class="panel">
@@ -637,9 +727,27 @@
           </div>
         </div>
         <div class="panel" id="vip-panel">
-          <div class="panel-title">支持作者</div>
-          <p class="hint vip-support-text">如果你觉得软件确实对你有帮助，可以打赏任意金额给作者，感谢支持。所有功能永久免费使用。</p>
-          <div class="vip-hint" id="vip-hint"></div>
+          <div class="panel-title">关于软件</div>
+          <div class="vip-status" id="vip-status">全部功能已免费开放 ✓</div>
+          <div class="vip-benefits">
+            <div class="vip-benefit-title">本开源版已解锁全部功能：</div>
+            <div class="vip-benefit">⭐️ 完整每周周报：详细统计与可视化图表</div>
+            <div class="vip-benefit">⭐️ 全部个性主题与字体：所有主题和专属字体自由切换</div>
+            <div class="vip-benefit">⭐️ 成就徽章和所有隐藏彩蛋：全部内容无限制使用</div>
+          </div>
+          <p class="hint vip-support-text">如果你觉得软件确实对你有帮助，愿意支持一下作者，可以打赏任意金额。<b>所有核心功能和附加功能现在永久免费，欢迎自由使用和传播。谢谢支持。</b></p>
+          <div class="vip-fonts-title">专属字体 <span class="vip-fonts-state" id="vip-fonts-state">已解锁</span></div>
+          <div class="vip-fonts" id="vip-fonts">
+            <button class="vip-font-opt" data-font="default" style="font-family: inherit;">默认字体<small>系统默认</small></button>
+            <button class="vip-font-opt" data-font="qkhy" style="font-family: 'ZCOOL QingKe HuangYou', sans-serif;">清刻黄油体<small>站酷 · 俏皮可爱</small></button>
+            <button class="vip-font-opt" data-font="kuaile" style="font-family: 'ZCOOL KuaiLe', sans-serif;">快乐体<small>站酷 · 活泼潮流</small></button>
+            <button class="vip-font-opt" data-font="zhimang" style="font-family: 'Zhi Mang Xing', cursive;">志莽行书<small>行书 · 苍劲有力</small></button>
+            <button class="vip-font-opt" data-font="xiaowei" style="font-family: 'ZCOOL XiaoWei', serif;">站酷小薇<small>站酷 · 文艺优雅</small></button>
+            <button class="vip-font-opt" data-font="maszheng" style="font-family: 'Ma Shan Zheng', cursive;">马善政毛笔<small>书法 · 端庄大气</small></button>
+            <button class="vip-font-opt" data-font="wenkai" style="font-family: 'LXGW WenKai', serif;">霞鹜文楷<small>楷体 · 阅读舒适</small></button>
+            <button class="vip-font-opt" data-font="zhenkai" style="font-family: 'LXGW ZhenKai', cursive;">霞鹜臻楷<small>行楷 · 潇洒有韵</small></button>
+          </div>
+          <div class="vip-hint" id="vip-font-hint"></div>
           <div class="vip-fonts-title">字体大小 <span class="vip-fonts-state" id="fs-state">默认 14</span></div>
           <div class="fs-row">
             <span class="fs-tag">小</span>

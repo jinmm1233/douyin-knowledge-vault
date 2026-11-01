@@ -2,7 +2,8 @@
 param(
     [Parameter(Mandatory = $true)][string]$ProjectRoot,
     [Parameter(Mandatory = $true)][string]$StateDir,
-    [string]$BundleDirectory = ""
+    [string]$BundleDirectory = "",
+    [string]$Endpoint = "https://hf-mirror.com"
 )
 
 $ErrorActionPreference = "Stop"
@@ -91,6 +92,11 @@ function Import-LockedModelFile {
 
 $lockPath = Join-Path $ProjectRoot "models\faster-whisper-small.lock.json"
 if (-not (Test-Path -LiteralPath $lockPath -PathType Leaf)) { throw "Whisper model lock is missing: $lockPath" }
+# 下载源：默认国内镜像 hf-mirror.com；用户可在设置页切成官方 huggingface.co
+$baseEndpoint = ([string]$Endpoint).Trim().TrimEnd('/')
+if ($baseEndpoint -notmatch '^https://[A-Za-z0-9._-]+(\.[A-Za-z0-9._-]+)*(:\d+)?$') {
+    throw "Unsafe model endpoint: $Endpoint"
+}
 $lock = Get-Content -LiteralPath $lockPath -Encoding UTF8 -Raw | ConvertFrom-Json
 $repoId = [string]$lock.repoId
 $revision = [string]$lock.revision
@@ -136,7 +142,7 @@ try {
         $size = [long]$entry.bytes
         if ($sha256 -notmatch '^[0-9a-fA-F]{64}$' -or $size -le 0) { throw "Invalid model size or SHA-256 in lock file." }
         $encodedFilename = [Uri]::EscapeDataString($filename)
-        $url = "https://hf-mirror.com/$repoId/resolve/$revision/$encodedFilename`?download=true"
+        $url = "$baseEndpoint/$repoId/resolve/$revision/$encodedFilename`?download=true"
         $destination = Join-Path $modelDir $filename
         if ($verifiedBundleDirectory) {
             $bundleFile = Join-Path $verifiedBundleDirectory $filename

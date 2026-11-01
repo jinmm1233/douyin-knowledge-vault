@@ -243,7 +243,7 @@ async function runCangjieDistill(settings, sel, send) {
       const c = read(path.join(root, "candidates", outName));
       if (c) allCandidates += `--- ${outName} ---\n${c}\n`;
     }
-    const out = await llmJson(settings,
+    const j = await llmJson(settings,
       `${p15}\n\n对全部候选执行三重验证。最后只输出 JSON：{"verified":[{"id":"f01","title":"...","type":"framework","source_location":"...","rationale":"V1/V2/V3 依据与演练摘要"}],"references":[{"id":"...","title":"...","why":"..."}],"needs_review":[{"id":"...","title":"...","gaps":"..."}],"rejected":[{"id":"...","title":"...","why":"..."}]}`,
       `${brief}\n\n=== BOOK_OVERVIEW（含原书关键任务清单）===\n${(read(path.join(root, "BOOK_OVERVIEW.md")) || "").slice(0, 12000)}\n\n=== 全部候选 ===\n${allCandidates.slice(0, 30000)}`, 8000, extractJson);
     const vm = ["# 验证结果（三重验证）\n"];
@@ -273,7 +273,7 @@ async function runCangjieDistill(settings, sel, send) {
     const p2 = read(path.join(mdir, "04-stage2-ria-plus.md"));
     const verifiedJson = JSON.parse(read(path.join(root, "verified.json")));
     const vlist = JSON.stringify(verifiedJson.verified || []);
-    const out = await llmJson(settings,
+    const j = await llmJson(settings,
       `${p16}\n\n${p2}\n\n对每个 verified 能力执行晋级门评审并构造能力元数据。最后只输出 JSON：\n{"entry":{"name":"kebab-case 主入口名","description":"何时调用+何时不调用（≥40字）","core_principles":["3-7条核心原则"],"out_of_scope":["至少1条"],"stop_conditions":["至少1条"]},"router_entry":{"name":"kebab-case","description":"来源路由入口描述（≥40字）"},"promotion_budget":8,"capabilities":[{"capability_id":"cap.<book-slug>.<cap-slug>","revision":1,"slug":"kebab-case","title":"中文标题","importance":"critical|high|medium|low","importance_rationale":"依据（任务映射/遗漏后果，≥8字）","one_liner":"一句话决策规则","intents":["用户意图"],"keywords":["中英关键词"],"frontmatter":{"description":"何时用+何时不用+trigger（≤300字）","tags":["tag"]},"source_evidence":[{"source_id":"src-douyin-collection","location":"笔记名"}],"promotion":{"destination":"promoted|router","gate":{"independent_intent":true,"independent_contract":true,"independent_run":true,"independent_reuse":true,"independent_eval":true},"notes":"评审说明"}}]}`,
       `${brief}\n\n=== BOOK_OVERVIEW ===\n${(read(path.join(root, "BOOK_OVERVIEW.md")) || "").slice(0, 12000)}\n\n=== 验证通过的单元 ===\n${vlist}`, 10000, extractJson);
     write(path.join(root, "bundle-meta.json"), JSON.stringify(j, null, 2));
@@ -309,7 +309,7 @@ async function runCangjieDistill(settings, sel, send) {
     const bundleMeta = JSON.parse(read(path.join(root, "bundle-meta.json")));
     const capSummary = bundleMeta.capabilities.map((c) => `${c.capability_id}|${c.title}|${c.one_liner}`).join("\n");
     const glossaryCandidates = read(path.join(root, "candidates", "glossary.md")) || "";
-    const out = await llmJson(settings,
+    const j = await llmJson(settings,
       `${p3}\n\n基于能力清单建立引用关系并整理术语表。最后只输出 JSON：{"also_read":{"cap.<book>.<slug>":["cap.<book>.<other-slug>"]},"glossary_md":"术语表 markdown 正文（GLOSSARY.md 完整内容）"}`,
       `${brief}\n\n=== 能力清单（capability_id|标题|一句话）===\n${capSummary}\n\n=== 术语候选 ===\n${glossaryCandidates.slice(0, 10000)}`, 10000, extractJson);
     write(path.join(root, "GLOSSARY.md"), extractMarkdown(j.glossary_md || ""));
@@ -324,7 +324,7 @@ async function runCangjieDistill(settings, sel, send) {
     const p4 = read(path.join(mdir, "06-stage4-pressure-test.md"));
     const bundleMeta = JSON.parse(read(path.join(root, "bundle-meta.json")));
     const capSummary = bundleMeta.capabilities.map((c) => `${c.title}（${c.slug}）`).join("、");
-    const out = await llmJson(settings,
+    const arr = await llmJson(settings,
       `${p4}\n\n为每个能力设计触发评测用例（darwin 兼容 test-prompts.json 格式）。最后只输出 JSON 数组（test-prompts.json 的数组内容本身）：[{"prompt":"代表用户提问","expected":"期望输出要点","capability":"cap_id"}]`,
       `${brief}\n\n能力列表：${capSummary}\n\n=== 能力卡摘要 ===\n${(read(path.join(capDir, "cards", bundleMeta.capabilities[0] && bundleMeta.capabilities[0].slug + ".md")) || "").slice(0, 6000)}`, 8000, extractArray);
     write(path.join(root, "test-prompts.json"), JSON.stringify(arr, null, 2));

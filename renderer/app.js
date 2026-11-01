@@ -1,5 +1,6 @@
 /* 抖音知识库桌面版 - 渲染进程 */
 let settings = null;
+let dashPaused = false; // 总览页暂停按钮的暂停/继续切换状态
 let vipState = { active: false };   // 会员状态：启动时由主进程验票后写入，界面只信它，不直接读 settings.vip.active
 let treeCache = null;
 let currentNote = null;   // { path, parts, title }
@@ -7,6 +8,19 @@ let editing = false;
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+/* 安全读写：界面上部分表单项（Word 输出、转录语言、模型精度、保留原视频等）已经下线，
+   但 JS 里还留着对应逻辑。缺少 null 判断会让 $("x") 返回 null 后直接抛错，
+   而顶层抛错会中断整段脚本 —— 设置页填充、启动流程全部不执行。
+   这里统一兜底：元素不存在就静默跳过。 */
+const safeOn = (id, event, handler) => { const el = $(id); if (el) el.addEventListener(event, handler); return el; };
+const safeVal = (id, value) => { const el = $(id); if (el) el.value = value; return el; };
+const safeSet = (id, prop, value) => { const el = $(id); if (el) el[prop] = value; return el; };
+const safeGet = (id, prop, fallback) => {
+  const el = $(id);
+  if (!el || el[prop] === undefined) return fallback;
+  return el[prop];
+};
 
 /* ================= 页面路由 ================= */
 const PAGES = ["dashboard", "new", "knowledge", "search", "pipeline", "skills", "blueprint", "failures", "distill", "settings"];
@@ -31,7 +45,12 @@ function switchPage(name) {
   if (name === "distill") loadDistillPicker();
   if (name === "dashboard") loadOverview();
   if (name === "new") loadNewArrivals();
-  if (name === "settings") { loadScheduleStatus(); renderSkins(); renderMaterials(); renderMotions(); renderSkinFx(); renderMotionPanel(); }
+  if (name === "settings") {
+    loadScheduleStatus(); renderSkins(); renderMaterials(); renderMotions(); renderSkinFx(); renderMotionPanel();
+    // 每次进设置页刷新模型与更新状态（下载进度由主进程事件推送，这里只兜底）
+    refreshModelStatus(false);
+    refreshUpdateStatus();
+  }
   if (name === "search") loadGlobalSearch();
   if (name === "pipeline") loadPipelinePage();
   if (name === "skills") loadSkillsPage();
@@ -46,6 +65,7 @@ document.querySelectorAll(".nav-item").forEach((btn) => {
 
 /* ================= 日志 ================= */
 let logBuf = "";
+let modelLogActive = false; // 下载模型时把同一条日志流同时写进模型面板
 function appendLog(chunk) {
   logBuf += chunk;
   if (logBuf.length > 60000) logBuf = logBuf.slice(-60000);
@@ -54,6 +74,10 @@ function appendLog(chunk) {
   const body = $("log-body");
   body.textContent = logBuf;
   body.scrollTop = body.scrollHeight;
+  if (modelLogActive) {
+    const mlog = $("model-log");
+    if (mlog) { mlog.textContent += String(chunk); mlog.scrollTop = mlog.scrollHeight; }
+  }
 }
 window.api.onLog(appendLog);
 
@@ -126,9 +150,11 @@ async function loadOverview() {
     window.api.statsOverview(settings),
     window.api.vaultTree(settings.vaultPath),
   ]);
-  const counts = stats.ok ? stats.counts : {};
-  const catCount = tree.categories.length;
-  const notes = tree.categories.reduce((n, c) => n + c.groups.reduce((m, g) => m + g.subs.reduce((k, s) => k + s.files.length, 0), 0), 0);
+  const counts = stats && stats.ok ? stats.counts : {};
+  // vaultTree 可能因为知识库路径没设置/权限问题返回异常结构，这里兜底避免总览整页崩掉
+  const categories = (tree && Array.isArray(tree.categories)) ? tree.categories : [];
+  const catCount = categories.length;
+  const notes = categories.reduce((n, c) => n + (c.groups || []).reduce((m, g) => m + (g.subs || []).reduce((k, s) => k + (s.files || []).length, 0), 0), 0);
   const items = [
     { cls: "blue", num: counts.written ?? 0, label: "已完成总结", note: "已生成笔记" },
     { cls: "green", num: counts.discovered ?? 0, label: "待处理", note: "尚未转录" },
@@ -331,17 +357,54 @@ $("dash-refresh").addEventListener("click", loadOverview);
 $("dash-process-one").addEventListener("click", async () => {
   openLogPanel();
   appendLog("\n==== 开始处理 1 条 ====\n");
-  await window.api.runPipeline(settings, ["sync"]);
-  appendLog("\n==== 完成 ====\n");
+  const res = await window.api.runPipeline(settings, ["sync", "--pending", "1", "--order", "recent"]);
+  if (res && res.error) {
+    appendLog(`\n[错误] ${res.error}\n`);
+    if (res.needVault) switchPage("settings");
+  } else {
+    appendLog(res && res.stopped ? "\n==== 已手动停止 ====\n" : "\n==== 完成 ====\n");
+  }
   loadOverview();
 });
 $("dash-batch").addEventListener("click", async () => {
   openLogPanel();
-  appendLog("\n==== 批量处理 20 条（断网自动续跑）====\n");
-  await window.api.runPipeline(settings, ["sync", "--newest", "20"]);
-  appendLog("\n==== 完成 ====\n");
+  appendLog("\n==== 批量处理 20 条（最新收藏优先，断网自动续跑）====\n");
+  const res = await window.api.runPipeline(settings, ["sync", "--pending", "20", "--order", "recent"]);
+  if (res && res.error) {
+    appendLog(`\n[错误] ${res.error}\n`);
+    if (res.needVault) switchPage("settings");
+  } else {
+    appendLog(res && res.stopped ? "\n==== 已手动停止 ====\n" : "\n==== 完成 ====\n");
+  }
   loadOverview();
 });
+
+// 总览页暂停/继续（与处理中心页一致：暂停=当前视频处理完后停在下一条之前；继续=接着跑）
+$("dash-pause").addEventListener("click", async () => {
+  if (!dashPaused) {
+    const res = await window.api.pauseSync(settings);
+    if (res && res.ok) {
+      dashPaused = true;
+      $("dash-pause").textContent = "▶ 继续";
+      $("dash-pause").classList.add("active");
+      toast("已暂停：当前视频处理完即停，点「继续」恢复");
+    } else {
+      toast("暂停失败：" + ((res && res.error) || "未知错误"));
+    }
+  } else {
+    const res = await window.api.resumeSync(settings);
+    if (res && res.ok) {
+      dashPaused = false;
+      $("dash-pause").textContent = "⏸ 暂停";
+      $("dash-pause").classList.remove("active");
+      toast("已继续：任务将接着跑");
+    } else {
+      toast("继续失败：" + ((res && res.error) || "未知错误"));
+    }
+  }
+});
+// 强制停止后同步重置暂停按钮显示（在原有 dash-force-stop 绑定里处理，见下方）
+
 
 /* ================= 首次处理收藏（总览） ================= */
 // 模式切换：全部收藏 vs 指定收藏夹
@@ -387,9 +450,15 @@ function dateAskAcknowledged() {
   return !!(settings.startDateAcknowledged || settings.startDate);
 }
 
-// 开始处理收藏：检查登录 → 询问日期 → 采集+导入+处理
+// 开始处理收藏：检查知识库路径 → 检查登录 → 询问日期 → 采集+导入+处理
 async function startCollectFlow() {
   const status = $("collect-status");
+  // 没有知识库路径时先拦：否则整批跑完才在写笔记时失败，白耗时间和 API 费用
+  if (!String(settings.vaultPath || "").trim()) {
+    status.textContent = "还没有选择知识库路径：请先到「设置 → 知识库路径（Vault）」选一个文件夹。";
+    switchPage("settings");
+    return;
+  }
   const mode = $("cm-folder").checked ? "folder" : "all";
   if (mode === "folder" && !$("collect-folder-select").value) {
     status.textContent = "请先选择要处理的收藏夹（或点「更新收藏夹」加载）";
@@ -447,7 +516,15 @@ async function runCollectFlow(mode) {
     payload.collectsName = select.selectedOptions[0]?.dataset?.name || "";
   }
   appendLog(`\n==== 开始处理收藏（${mode === "folder" ? `收藏夹：${payload.collectsName}` : "全部收藏"}）====\n`);
-  const res = await window.api.startCollect(settings, payload);
+  // 防连点：以前双击会并发跑两个采集，两个浏览器抢同一个登录缓存目录 → 一个必崩
+  const runBtn = $("dash-start-collect");
+  if (runBtn) { runBtn.disabled = true; runBtn.textContent = "处理中…"; }
+  let res = null;
+  try {
+    res = await window.api.startCollect(settings, payload);
+  } finally {
+    if (runBtn) { runBtn.disabled = false; runBtn.textContent = "开始处理收藏"; }
+  }
   appendLog(res && res.cancelled ? "\n==== 已取消 ====\n" : res && res.ok ? "\n==== 本轮完成 ====\n" : `\n==== 处理结束（${(res && res.error) || "部分失败，见日志"}）====\n`);
   status.textContent = res && res.ok ? "本轮处理完成" : ((res && res.error) || "处理结束，详见日志");
   if (res && res.ok) celebrate($("dash-start-collect"));
@@ -531,6 +608,15 @@ $("kb-group").addEventListener("change", () => {
 });
 // 知识库手动刷新：重新扫描文件系统（Obsidian 里新增/删除/改名笔记后点一下即可看到）
 $("kb-refresh").addEventListener("click", () => { renderFolders(); toast("已刷新知识库 ✓"); });
+// 最新生成视图开关：按生成时间倒序列出全部已生成笔记
+let recentViewOn = false;
+$("kb-recent-btn").addEventListener("click", () => {
+  recentViewOn = !recentViewOn;
+  $("kb-recent-btn").classList.toggle("active", recentViewOn);
+  $("kb-crumb").hidden = recentViewOn;
+  if (recentViewOn) { renderRecentNotes(); toast("已切换到「最新生成」视图"); }
+  else { renderFolders(); }
+});
 
 /* ================= 打赏作者 ================= */
 // 说明：弹窗 DOM 位于 <script> 之后，必须等 DOMContentLoaded 再绑定，否则 × 等关闭按钮绑定不到
@@ -985,6 +1071,65 @@ async function renderFolders() {
   }
 }
 
+// 中文相对时间（用于「最新生成」视图展示生成多久前）
+function timeAgo(iso) {
+  if (!iso) return "";
+  const t = new Date(iso.replace(" ", "T") + (iso.includes("Z") || iso.includes("+") ? "" : "Z")).getTime();
+  if (isNaN(t)) return "";
+  const diff = Math.floor((Date.now() - t) / 1000);
+  if (diff < 60) return "刚刚";
+  if (diff < 3600) return `${Math.floor(diff / 60)} 分钟前`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)} 小时前`;
+  if (diff < 86400 * 30) return `${Math.floor(diff / 86400)} 天前`;
+  if (diff < 86400 * 365) return `${Math.floor(diff / 86400 / 30)} 个月前`;
+  return `${Math.floor(diff / 86400 / 365)} 年前`;
+}
+
+// 最新生成视图：按 updated_at 倒序展示已生成笔记，点击可直接打开阅读
+async function renderRecentNotes() {
+  const grid = $("folder-grid");
+  grid.innerHTML = '<div class="folder-empty-hint">正在加载最近生成的笔记…</div>';
+  const res = await window.api.notes(settings, { limit: 200 });
+  if (!res || !res.ok) {
+    grid.innerHTML = `<div class="folder-empty-hint">加载失败：${res && res.error ? res.error : "未知错误"}</div>`;
+    return;
+  }
+  const items = res.items || [];
+  if (!items.length) {
+    grid.innerHTML = '<div class="folder-empty-hint">还没有生成任何笔记，先去「开始处理收藏」吧</div>';
+    return;
+  }
+  grid.innerHTML = "";
+  const header = document.createElement("div");
+  header.className = "recent-head";
+  header.innerHTML = `<span class="recent-head-title">🕒 最新生成</span><span class="recent-head-sub">共 ${items.length} 篇 · 按生成时间倒序</span>`;
+  grid.appendChild(header);
+  for (const it of items) {
+    const card = document.createElement("div");
+    card.className = "note-card recent-note";
+    const ago = timeAgo(it.updated_at);
+    const catParts = [it.category, it.group, it.subcategory].filter(v => v && v !== "综合" && v !== "未分类");
+    const cat = catParts.join(" / ") || "未分类";
+    card.innerHTML = `
+      <div class="nc-top">
+        <div class="nc-ico">${DOC_SVG}</div>
+        <div class="nc-title">${esc(it.title || "未命名笔记")}</div>
+      </div>
+      <div class="nc-sub">${esc(cat || "未分类")} · ${esc(ago)}</div>`;
+    card.addEventListener("click", () => {
+      if (it.note_path) openNoteByPath(it.note_path);
+      else toast("该笔记路径缺失，无法打开");
+    });
+    grid.appendChild(card);
+  }
+  if (pageFxOn("pageFxStagger")) {
+    grid.querySelectorAll(".note-card").forEach((el, i) => {
+      el.style.animationDelay = (Math.min(i, 14) * 40).toFixed(0) + "ms";
+      el.classList.add("stagger-in");
+    });
+  }
+}
+
 async function openNoteByParts(parts) {
   const filePath = ["Knowledge"].concat(parts).join("\\");
   const res = await window.api.vaultRead(settings.vaultPath, filePath);
@@ -1038,6 +1183,26 @@ function enterEditMode(content) {
   ed.focus();
 }
 
+$("btn-highlight").addEventListener("click", async () => {
+  if (!currentNote || !currentNote.path) { toast("请先打开一篇笔记"); return; }
+  const btn = $("btn-highlight");
+  const old = btn.textContent;
+  btn.disabled = true; btn.textContent = "划重点中…";
+  try {
+    const res = await window.api.highlight({ file: currentNote.path });
+    if (res && res.ok) {
+      const r = await window.api.vaultRead("", currentNote.path);
+      if (r.ok) enterReadMode(r.content);
+      toast("已智能划重点 ✓ 重点词已加粗");
+    } else {
+      toast("划重点失败：" + ((res && res.error) || "未知错误"), true);
+    }
+  } catch (err) {
+    toast("划重点出错：" + (err && err.message || err), true);
+  } finally {
+    btn.disabled = false; btn.textContent = old;
+  }
+});
 $("btn-edit").addEventListener("click", async () => {
   if (!currentNote) return;
   const res = await window.api.vaultRead("", currentNote.path);
@@ -1131,6 +1296,7 @@ function closeGraph() {
 window.api.onVaultChanged(() => {
   if (!$("graph-view") || $("graph-view").hidden || !graphSvgEl) return;
   graphPendingZoom = d3.zoomTransform(graphSvgEl);
+  graphCache = null; // 笔记有增删改，缓存必须失效，否则看到的还是旧图
   renderGraph();
 });
 
@@ -1159,7 +1325,8 @@ function detectGraphCommunities(nodes, edges) {
   nodes.forEach((n) => {
     const l = label.get(n.id);
     size.set(l, (size.get(l) || 0) + 1);
-    const key = l + "::" + (n.group || "未分类");
+    // 概念节点不参与社区命名（否则社区会被叫成"概念"），但计入社区大小
+    const key = l + "::" + (n.kind === "concept" ? "__concept__" : (n.group || "未分类"));
     groupCnt.set(key, (groupCnt.get(key) || 0) + 1);
   });
   const order = [...size.keys()].sort((a, b) => size.get(b) - size.get(a));
@@ -1170,7 +1337,7 @@ function detectGraphCommunities(nodes, edges) {
     commSize.set(i, size.get(l));
     let best = null, bestC = 0;
     for (const [k, c] of groupCnt) {
-      if (k.startsWith(l + "::") && c > bestC) { bestC = c; best = k.slice(l.length + 2); }
+      if (k.startsWith(l + "::") && !k.endsWith("::__concept__") && c > bestC) { bestC = c; best = k.slice(l.length + 2); }
     }
     commName.set(i, best || "未分类");
   });
@@ -1184,8 +1351,36 @@ function graphCommunityColor(cid) {
   return palette[cid % palette.length];
 }
 
-function renderGraph() {
-  return window.api.vaultGraph(settings).then((g) => {
+/* ---- 图谱数据：概念节点的显示档位（全部 / 只显示被多篇笔记共用的 / 隐藏） ---- */
+let graphCache = null;
+let graphConceptMode = localStorage.getItem("dok.graph.conceptMode") || "all";
+const GRAPH_CONCEPT_MODES = {
+  all: "概念：全部",
+  shared: "概念：仅共用",
+  hidden: "概念：隐藏",
+};
+
+// 概念节点 = AI 提炼出的「相关概念」，它让不同笔记通过同一个概念连起来。
+// 全部显示时笔记几乎不会孤立，但节点多；只显示共用概念时更清爽。
+function filterGraphData(g, mode) {
+  if (mode === "all") return g;
+  const keep = new Set();
+  for (const n of g.nodes) {
+    if (n.kind !== "concept") keep.add(n.id);
+    else if (mode === "shared" && (n.weight || 0) >= 2) keep.add(n.id);
+  }
+  return {
+    nodes: g.nodes.filter((n) => keep.has(n.id)),
+    edges: g.edges.filter((e) => keep.has(e.source) && keep.has(e.target)),
+  };
+}
+
+function renderGraph(useCache = false) {
+  const fetchGraph = useCache && graphCache
+    ? Promise.resolve(graphCache)
+    : window.api.vaultGraph(settings).then((g) => (graphCache = g));
+  return fetchGraph.then((raw) => {
+    const g = filterGraphData(raw, graphConceptMode);
     const nodes = g.nodes.map((n) => ({ ...n }));
     const edges = g.edges.map((e) => ({ ...e }));
     const wrap = $("graph-view");
@@ -1194,6 +1389,7 @@ function renderGraph() {
         <div class="gt-title"><span class="gt-title-mark">◈</span>知识图谱<span class="gt-sub">双链力导向 · 深蓝科技</span></div>
         <div class="gt-stats" id="gt-stats"></div>
         <span class="spacer"></span>
+        <button class="btn small ghost" id="gt-concept-mode" title="概念节点：笔记里提取出的「相关概念」。点一下切换 全部 / 仅共用 / 隐藏">${GRAPH_CONCEPT_MODES[graphConceptMode] || GRAPH_CONCEPT_MODES.all}</button>
         <button class="btn small ghost" id="gt-refresh" title="重新扫描知识库，读取最新笔记">⟳ 刷新</button>
         <button class="btn small ghost" id="gt-fit">复位视图</button>
         <button class="btn small" id="gt-close">关闭</button>
@@ -1207,7 +1403,7 @@ function renderGraph() {
         </div>
         <div class="gt-canvas-wrap" id="gt-canvas-wrap">
           <svg id="gt-canvas"></svg>
-          <div class="gt-hint">拖拽节点 · 滚轮缩放 · 空白平移 · 悬停高亮 · 单击看详情 · 双击打开笔记</div>
+          <div class="gt-hint">实心圆＝笔记，空心圈＝概念｜拖拽节点 · 滚轮缩放 · 空白平移 · 悬停高亮 · 单击看详情 · 双击打开笔记</div>
         </div>
         <div class="gt-panel gt-right">
           <div class="gt-panel-title">节点详情</div>
@@ -1233,8 +1429,12 @@ function renderGraph() {
     nodes.forEach((n) => {
       n.comm = nodeComm.get(n.id);
       n.deg = degMap.get(n.id) || 0;
-      n.consensus = n.title.startsWith("00-");
-      n.r = (n.consensus ? 7.5 : 5.5) + Math.min(9, n.deg * 1.2);
+      n.isConcept = n.kind === "concept";
+      n.consensus = !n.isConcept && n.title.startsWith("00-");
+      // 概念节点画小一圈：它只是"连接点"，不是内容本身；被多篇笔记引用时略微放大
+      n.r = n.isConcept
+        ? 2.8 + Math.min(5, (n.weight || 1) * 0.7)
+        : (n.consensus ? 7.5 : 5.5) + Math.min(9, n.deg * 1.2);
     });
     const colorOf = (c) => graphCommunityColor(c);
     const centers = [];
@@ -1251,7 +1451,8 @@ function renderGraph() {
       .force("x", d3.forceX((d) => centers[d.comm][0]).strength(0.05))
       .force("y", d3.forceY((d) => centers[d.comm][1]).strength(0.05))
       .force("collide", d3.forceCollide().radius((d) => d.r + 4).strength(0.85))
-      .alphaDecay(0.03);
+      // 节点多（含概念节点）时收敛快一点，避免首帧卡住
+      .alphaDecay(nodes.length > 1200 ? 0.06 : 0.03);
 
     const svg = d3.select("#gt-canvas").attr("width", W).attr("height", H);
     svg.selectAll("*").remove();
@@ -1279,17 +1480,29 @@ function renderGraph() {
     // 连线（流动虚线）
     const link = zoomG.append("g").attr("class", "gt-links").selectAll("line")
       .data(edges).join("line")
-      .attr("class", (d) => (nodeComm.get(d.source.id) !== nodeComm.get(d.target.id) ? "gt-link gt-link-cross" : "gt-link"));
+      .attr("class", (d) => "gt-link"
+        + (nodeComm.get(d.source.id) !== nodeComm.get(d.target.id) ? " gt-link-cross" : "")
+        + (d.kind === "concept" ? " gt-link-concept" : ""));
 
     // 节点：光晕 + 主圆 + 高光 + 标签
     const node = zoomG.append("g").attr("class", "gt-nodes").selectAll("g")
       .data(nodes).join("g")
-      .attr("class", (d) => "gt-node" + (d.consensus ? " gt-node-diamond" : ""));
+      .attr("class", (d) => "gt-node" + (d.consensus ? " gt-node-diamond" : "") + (d.isConcept ? " gt-node-concept" : ""));
 
-    node.append("circle").attr("class", "gt-glow").attr("r", (d) => d.r * 2.4).attr("fill", (d) => colorOf(d.comm)).attr("opacity", 0.26);
-    node.append("circle").attr("class", "gt-core").attr("r", (d) => d.r).attr("fill", (d) => colorOf(d.comm)).attr("style", (d) => `filter: drop-shadow(0 0 6px ${colorOf(d.comm)});`);
-    node.append("circle").attr("class", "gt-shine").attr("r", (d) => Math.max(1.6, d.r * 0.32)).attr("cx", (d) => -d.r * 0.32).attr("cy", (d) => -d.r * 0.32).attr("fill", "rgba(255,255,255,0.5)");
-    node.append("text").attr("class", "gt-label")
+    node.append("circle").attr("class", "gt-glow").attr("r", (d) => d.r * 2.4).attr("fill", (d) => colorOf(d.comm)).attr("opacity", (d) => (d.isConcept ? 0.12 : 0.26));
+    // 概念节点画成空心圈：一眼能区分"概念"和"笔记"
+    node.append("circle").attr("class", "gt-core")
+      .attr("r", (d) => d.r)
+      .attr("fill", (d) => (d.isConcept ? "rgba(8, 18, 32, 0.85)" : colorOf(d.comm)))
+      .attr("stroke", (d) => (d.isConcept ? colorOf(d.comm) : null))
+      .attr("stroke-width", (d) => (d.isConcept ? 1.2 : null))
+      .attr("style", (d) => (d.isConcept ? "" : `filter: drop-shadow(0 0 6px ${colorOf(d.comm)});`));
+    node.append("circle").attr("class", "gt-shine").attr("r", (d) => Math.max(1.6, d.r * 0.32)).attr("cx", (d) => -d.r * 0.32).attr("cy", (d) => -d.r * 0.32).attr("fill", (d) => (d.isConcept ? "transparent" : "rgba(255,255,255,0.5)"));
+    node.append("text")
+      .attr("class", (d) => "gt-label"
+        + (d.isConcept ? " gt-label-concept" : "")
+        // 只被一篇笔记用到的概念：标签默认隐藏（1500 多个会糊成一片），悬停时显示
+        + (d.isConcept && (d.weight || 0) < 2 ? " gt-label-minor" : ""))
       .attr("dx", (d) => d.r + 7).attr("dy", 3.5)
       .text((d) => (d.title.length > 10 ? d.title.slice(0, 10) + "…" : d.title));
 
@@ -1323,16 +1536,18 @@ function renderGraph() {
         return t ? `<div class="gt-detail-link" data-id="${esc(t.id)}">${esc(t.title)}</div>` : "";
       }).join("");
       const more = links.length > 18 ? `<div class="gt-detail-more">…还有 ${links.length - 18} 条</div>` : "";
+      const metaHtml = d.isConcept
+        ? `<span>类型：概念（连接点）</span><span>${links.length} 篇笔记引用</span>`
+        : `<span>分类：${esc(d.group || "未分类")}</span>
+           <span>社区：${esc(commName.get(d.comm))}</span>
+           <span>${d.deg} 条链接${d.consensus ? " · 共识观点文档" : ""}</span>`;
+      const openHtml = d.isConcept ? "" : `<div class="gt-detail-open"><button class="btn primary small" id="gt-open-note">打开笔记</button></div>`;
       detailBox.innerHTML = `
         <div class="gt-detail-node" style="--nc:${colorOf(d.comm)}">
           <div class="gt-detail-name">${esc(d.title)}</div>
-          <div class="gt-detail-meta">
-            <span>分类：${esc(d.group || "未分类")}</span>
-            <span>社区：${esc(commName.get(d.comm))}</span>
-            <span>${d.deg} 条双链${d.consensus ? " · 共识观点文档" : ""}</span>
-          </div>
-          <div class="gt-detail-open"><button class="btn primary small" id="gt-open-note">打开笔记</button></div>
-          <div class="gt-detail-links-title">双向链接（${links.length}）</div>
+          <div class="gt-detail-meta">${metaHtml}</div>
+          ${openHtml}
+          <div class="gt-detail-links-title">${d.isConcept ? "引用该概念的笔记" : "双向链接"}（${links.length}）</div>
           <div class="gt-detail-links">${items}${more}</div>
         </div>`;
       const openBtn = $("gt-open-note");
@@ -1340,7 +1555,7 @@ function renderGraph() {
       detailBox.querySelectorAll(".gt-detail-link").forEach((el) => {
         el.addEventListener("click", () => {
           const t = nodeById.get(el.dataset.id);
-          if (t) { openNoteByPath(t.path); closeGraph(); }
+          if (t && t.path) { openNoteByPath(t.path); closeGraph(); }
         });
       });
     };
@@ -1357,7 +1572,7 @@ function renderGraph() {
     });
     node.on("mouseleave", clearHover);
     node.on("click", (ev, d) => { ev.stopPropagation(); showDetail(d); });
-    node.on("dblclick", (ev, d) => { ev.stopPropagation(); openNoteByPath(d.path); closeGraph(); });
+    node.on("dblclick", (ev, d) => { ev.stopPropagation(); if (!d.path) return; openNoteByPath(d.path); closeGraph(); });
     svg.on("click", () => {
       detailBox.innerHTML = `<div class="gt-detail-empty">点击图谱中的节点查看详情<br/>双击节点直接打开笔记</div>`;
     });
@@ -1366,17 +1581,31 @@ function renderGraph() {
     $("gt-fit").addEventListener("click", () => {
       svg.transition().duration(400).call(zoom.transform, d3.zoomIdentity);
     });
+    // 概念显示档位：全部 → 仅共用 → 隐藏（只重排视图，不重新读盘）
+    $("gt-concept-mode").addEventListener("click", async () => {
+      const order = ["all", "shared", "hidden"];
+      graphConceptMode = order[(order.indexOf(graphConceptMode) + 1) % order.length];
+      localStorage.setItem("dok.graph.conceptMode", graphConceptMode);
+      graphPendingZoom = d3.zoomTransform(svg.node());
+      await renderGraph(true);
+    });
     // 刷新：重新扫描知识库并重建图谱（保留当前缩放/平移视图）
     $("gt-refresh").addEventListener("click", async () => {
       graphPendingZoom = d3.zoomTransform(svg.node());
+      graphCache = null;
       await renderGraph();
     });
 
     // ---- 左面板：概览 + 社区 ----
     const linkedCount = nodes.filter((n) => n.deg > 0).length;
+    const noteCount = nodes.filter((n) => !n.isConcept).length;
+    const conceptCount = nodes.length - noteCount;
+    const noteLinkCount = edges.filter((e) => e.kind !== "concept").length;
     $("gt-overview").innerHTML = `
-      <div class="gt-ov-row"><span>节点</span><b>${nodes.length}</b></div>
-      <div class="gt-ov-row"><span>双向链接</span><b>${edges.length}</b></div>
+      <div class="gt-ov-row"><span>笔记</span><b>${noteCount}</b></div>
+      <div class="gt-ov-row"><span>概念</span><b>${conceptCount}</b></div>
+      <div class="gt-ov-row"><span>笔记间双链</span><b>${noteLinkCount}</b></div>
+      <div class="gt-ov-row"><span>连线总数</span><b>${edges.length}</b></div>
       <div class="gt-ov-row"><span>有链接节点</span><b>${linkedCount}</b></div>
       <div class="gt-ov-row"><span>主题社区</span><b>${nComms}</b></div>`;
     const commList = [...Array(nComms).keys()].map((c) => [c, commSize.get(c)]).sort((a, b) => b[1] - a[1]);
@@ -1398,8 +1627,8 @@ function renderGraph() {
         link.classed("gt-dim", (l) => nodeComm.get(l.source.id) !== c && nodeComm.get(l.target.id) !== c);
       });
     });
-    $("gt-stats").textContent = `${nodes.length} 节点 · ${edges.length} 双链 · ${nComms} 社区`;
-    $("gt-stats").title = "悬停节点高亮邻居，拖拽节点实时联动";
+    $("gt-stats").textContent = `${noteCount} 笔记 · ${conceptCount} 概念 · ${edges.length} 连接 · ${nComms} 社区`;
+    $("gt-stats").title = "实心圆=笔记，空心圈=概念；多篇笔记引用同一概念时就会连在一起";
     // 刷新/自动更新后恢复之前视图
     if (graphPendingZoom) {
       svg.call(zoom.transform, graphPendingZoom);
@@ -1579,6 +1808,60 @@ $("dist-run").addEventListener("click", async () => {
   }
 });
 
+/* ================= 知识库Word/Markdown切换 ================= */
+function renderWordTree(node, container) {
+  // 渲染文件夹
+  for (const folder of node.folders || []) {
+    const card = document.createElement("div");
+    card.className = "folder-card";
+    card.innerHTML = `<div class="folder-icon">📁</div><div class="folder-name">${folder.name}</div>`;
+    card.addEventListener("click", () => {
+      container.innerHTML = "";
+      renderWordTree({folders: folder.subFolders, files: folder.subFiles}, container);
+    });
+    container.appendChild(card);
+  }
+  // 渲染Word文件
+  for (const file of node.files || []) {
+    const card = document.createElement("div");
+    card.className = "folder-card";
+    card.innerHTML = `<div class="folder-icon">📄</div><div class="folder-name">${file.name}</div>`;
+    card.addEventListener("click", () => window.api.openWord(file.path));
+    container.appendChild(card);
+  }
+}
+async function loadWordDocs() {
+  const tree = await window.api.wordTree();
+  const grid = $("word-grid");
+  grid.innerHTML = "";
+  renderWordTree(tree, grid);
+}
+// Word 文档页签已从界面移除：这里必须判空，否则 $("kb-tab-word") 为 null 时
+// 会在脚本加载阶段抛 TypeError，把后面所有初始化（设置页、启动流程）全部中断
+const kbTabMd = $("kb-tab-md");
+const kbTabWord = $("kb-tab-word");
+if (kbTabMd) {
+  kbTabMd.addEventListener("click", () => {
+    kbTabMd.classList.add("active");
+    if (kbTabWord) kbTabWord.classList.remove("active");
+    const folderGrid = $("folder-grid");
+    if (folderGrid) folderGrid.hidden = false;
+    const wordGrid = $("word-grid");
+    if (wordGrid) wordGrid.hidden = true;
+  });
+}
+if (kbTabWord) {
+  kbTabWord.addEventListener("click", async () => {
+    kbTabWord.classList.add("active");
+    if (kbTabMd) kbTabMd.classList.remove("active");
+    const folderGrid = $("folder-grid");
+    if (folderGrid) folderGrid.hidden = true;
+    const wordGrid = $("word-grid");
+    if (wordGrid) wordGrid.hidden = false;
+    await loadWordDocs();
+  });
+}
+
 /* ================= 设置 ================= */
 function fillSettingsForm() {
   $("set-project").value = settings.projectPath || "";
@@ -1606,7 +1889,42 @@ function fillSettingsForm() {
   const wr = settings.weeklyReport || {};
   $("wr-enable").checked = wr.enabled !== false;
   $("wr-weekday").value = String(wr.weekday || 2);
+  // 输出模式与字幕优先（相关表单项已从界面移除，用安全读写避免初始化被打断）
+  const outputMode = settings.processingMode === "plaintext" ? "plaintext" : "knowledge";
+  safeSet("set-output-knowledge", "checked", outputMode === "knowledge");
+  safeSet("set-output-plaintext", "checked", outputMode === "plaintext");
+  safeVal("set-plain-format", ["md", "docx"].includes(settings.plaintextOutputFormat) ? settings.plaintextOutputFormat : "docx");
+  safeSet("set-prefer-subtitle", "checked", settings.preferBuiltinSubtitle !== false);
+  safeVal("set-language", ["auto", "zh", "en", "ja", "ko", "yue", "fr", "es", "de", "ru"].includes(settings.language) ? settings.language : "zh");
+  safeVal("set-whisper-tier", ["small", "medium", "large-v3"].includes(settings.whisperModelTier) ? settings.whisperModelTier : "small");
+  safeSet("set-bgm-recognition", "checked", settings.enableBgmRecognition === true);
+  safeSet("set-keep-videos", "checked", settings.keepOriginalVideos === true);
+  safeVal("set-video-save-path", settings.customMediaSavePath || "");
+  safeSet("keep-video-path-block", "hidden", !settings.keepOriginalVideos);
+  // 登录浏览器 / 模型下载源 / 更新源
+  const bmode = ["auto", "builtin", "system"].includes(settings.browserMode) ? settings.browserMode : "auto";
+  $("bm-auto").checked = bmode === "auto";
+  $("bm-builtin").checked = bmode === "builtin";
+  $("bm-system").checked = bmode === "system";
+  $("browser-proxy-direct").checked = settings.browserProxy === "direct";
+  $("model-endpoint").value = settings.modelEndpoint === "official" ? "official" : "mirror";
+  $("update-repo").value = settings.updateRepo || "";
+  $("update-feed-url").value = settings.updateFeedUrl || "";
+  $("update-auto-check").checked = settings.updateAutoCheck !== false;
+  // 回填跳过类型勾选
+  const skipBoxes = document.querySelectorAll("input[name='skip-cat']");
+  const selected = settings.skipCategories || [];
+  skipBoxes.forEach(box => box.checked = selected.includes(box.value));
 }
+// 保留视频开关切换（表单项已在界面下线，判空绑定）
+safeOn("set-keep-videos", "change", () => {
+  safeSet("keep-video-path-block", "hidden", !safeGet("set-keep-videos", "checked", false));
+});
+// 选择保存路径（同上）
+safeOn("btn-pick-video-path", "click", async () => {
+  const folder = await window.api.pickFolder();
+  if (folder) safeVal("set-video-save-path", folder);
+});
 
 function syncModeUi() {
   const isCount = $("set-mode-count").checked;
@@ -1645,6 +1963,19 @@ $("btn-settings-save").addEventListener("click", async () => {
     pauseAutoResumeMinutes: Math.max(0, Number($("set-pause-auto").value) || 0),
     // 每周知识日报（保留 lastShownDate/streak 等状态字段，只更新开关与星期）
     weeklyReport: { ...(settings.weeklyReport || {}), enabled: $("wr-enable").checked, weekday: Number($("wr-weekday").value) || 2 },
+    processingMode: safeGet("set-output-plaintext", "checked", false) ? "plaintext" : "knowledge",
+    plaintextOutputFormat: safeGet("set-plain-format", "value", "docx"),
+    preferBuiltinSubtitle: safeGet("set-prefer-subtitle", "checked", true),
+    language: safeGet("set-language", "value", "zh"),
+    whisperModelTier: safeGet("set-whisper-tier", "value", "small"),
+    enableBgmRecognition: safeGet("set-bgm-recognition", "checked", false),
+    keepOriginalVideos: safeGet("set-keep-videos", "checked", false),
+    customMediaSavePath: String(safeGet("set-video-save-path", "value", "")).trim(),
+    skipCategories: Array.from(document.querySelectorAll("input[name='skip-cat']:checked")).map(b => b.value),
+    // 登录浏览器 / 代理 / 模型下载源（更新源在「软件更新」面板单独保存）
+    browserMode: $("bm-builtin").checked ? "builtin" : ($("bm-system").checked ? "system" : "auto"),
+    browserProxy: $("browser-proxy-direct").checked ? "direct" : "system",
+    modelEndpoint: $("model-endpoint").value === "official" ? "official" : "mirror",
   });
   const st = $("settings-status");
   st.textContent = "已保存 ✓";
@@ -1654,9 +1985,32 @@ $("btn-settings-save").addEventListener("click", async () => {
 
 $("btn-login").addEventListener("click", async () => {
   const out = $("login-out");
-  out.textContent = "正在打开抖音扫码登录窗口…\n";
-  const res = await window.api.loginDouyin(settings);
-  out.textContent += res.ok ? "登录窗口已打开，请在浏览器里完成扫码，然后点「检查登录状态」。\n" : `失败：${res.error || "未知错误"}\n`;
+  const st = $("login-status");
+  const btn = $("btn-login");
+  out.textContent = "正在打开抖音扫码登录窗口…（首次启动可能要等 10 秒左右）\n";
+  st.textContent = "登录中…";
+  st.className = "login-status";
+  btn.disabled = true;
+  btn.textContent = "等待你在浏览器里扫码…";
+  try {
+    const res = await window.api.loginDouyin(settings);
+    if (res.ok) {
+      out.textContent += `登录成功 ✅　使用浏览器：${res.browserLabel || res.browser || "默认浏览器"}\n`;
+      st.textContent = "已登录 ✓";
+      st.className = "login-status ok";
+      toast("登录成功 ✓");
+      return;
+    }
+    const reason = res.error || (res.status === "timeout" ? "等待扫码超时（300 秒内没检测到登录）" : "未知错误");
+    out.textContent += `失败：${reason}\n`;
+    if (res.browserLabel) out.textContent += `本次尝试使用的浏览器：${res.browserLabel}\n`;
+    out.textContent += "可以这样排查：\n① 在下方「登录与浏览器」把策略换成「只用本机浏览器（Chrome / Edge）」再试一次；\n② 如果抖音页面一片空白或报 ERR_PROXY_CONNECTION_FAILED，勾选「绕过系统代理」；\n③ 如果提示配置目录被占用，先关掉残留的浏览器窗口，再点「重置登录浏览器缓存」；\n④ 点「检测可用浏览器」看看到底哪个浏览器可用；\n⑤ 如果 Windows 弹过「是否允许应用通过防火墙」，点「允许访问」会更稳（只勾「专用网络」也可以）；点了取消通常还能联网，但个别网络环境下会被当成受限连接。\n";
+    st.textContent = "登录失败";
+    st.className = "login-status bad";
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "打开抖音扫码登录";
+  }
 });
 
 $("btn-test-llm").addEventListener("click", async () => {
@@ -1678,10 +2032,14 @@ $("btn-auth-status").addEventListener("click", async () => {
   const out = $("login-out");
   out.textContent = "正在检查登录状态…\n";
   const res = await window.api.authStatus(settings);
-  const raw = (res && res.raw) || "";
-  out.textContent += raw ? String(raw).slice(0, 800) : (res && res.error || "检查完成");
+  if (res && res.ok) {
+    out.textContent += `已登录 ✅　检查用浏览器：${res.browserLabel || res.browser || "默认"}\n`;
+  } else if (res && res.error) {
+    out.textContent += `检查失败：${res.error}\n`;
+  } else {
+    out.textContent += "还没登录（或登录态已失效）：点上面的「打开抖音扫码登录」重新扫码。\n";
+  }
   const st = $("login-status");
-  const lower = raw.toLowerCase();
   if (res && res.ok) {
     st.textContent = "已登录 ✓";
     st.className = "login-status ok";
@@ -1689,15 +2047,264 @@ $("btn-auth-status").addEventListener("click", async () => {
     st.textContent = "登录状态异常";
     st.className = "login-status bad";
   } else {
-    st.textContent = "状态未知";
-    st.className = "login-status";
+    st.textContent = "未登录";
+    st.className = "login-status bad";
   }
+});
+
+/* ================= 全局提示条 ================= */
+let bannerAction = null;
+function showBanner(text, actionLabel, action) {
+  const el = $("app-banner");
+  if (!el) return;
+  $("app-banner-text").textContent = text;
+  const btn = $("app-banner-action");
+  if (action && actionLabel) {
+    bannerAction = action;
+    btn.hidden = false;
+    btn.textContent = actionLabel;
+  } else {
+    bannerAction = null;
+    btn.hidden = true;
+  }
+  el.hidden = false;
+}
+$("app-banner-close").addEventListener("click", () => { $("app-banner").hidden = true; });
+$("app-banner-action").addEventListener("click", () => { if (bannerAction) bannerAction(); });
+
+/* ================= 登录与浏览器 ================= */
+async function saveBrowserSetting(patch) {
+  settings = await window.api.saveSettings(patch);
+  return settings;
+}
+
+for (const id of ["bm-auto", "bm-builtin", "bm-system"]) {
+  $(id).addEventListener("change", async () => {
+    if (!$(`${id}`).checked) return;
+    await saveBrowserSetting({ browserMode: $(id).value });
+    $("login-status").textContent = "未检查";
+    $("login-status").className = "login-status";
+    toast("已切换登录浏览器，下次点「打开抖音扫码登录」生效（需要重新扫码）");
+  });
+}
+
+$("browser-proxy-direct").addEventListener("change", async (e) => {
+  await saveBrowserSetting({ browserProxy: e.target.checked ? "direct" : "system" });
+  toast(e.target.checked ? "已改为绕过系统代理（适合开着 VPN/加速器的情况）" : "已改回跟随系统代理");
+});
+
+$("btn-browser-diagnose").addEventListener("click", async () => {
+  const box = $("browser-diag-log");
+  box.textContent = "检测中…\n";
+  const res = await window.api.browserDiagnose(settings);
+  const MODE_TEXT = { auto: "自动（内置优先、失败自动回退本机）", builtin: "只用内置浏览器", system: "只用本机浏览器" };
+  const lines = [];
+  lines.push(`当前策略：${MODE_TEXT[res.mode] || res.mode}　代理：${res.proxy === "direct" ? "绕过系统代理" : "跟随系统"}`);
+  for (const it of res.items || []) {
+    lines.push(`${it.found ? "✅" : "❌"} ${it.label}${it.found ? "" : "（未找到）"}`);
+    if (it.path) lines.push(`   程序：${it.path}`);
+    lines.push(`   登录缓存：${it.profile}${it.writable ? "" : "　⚠ 目录不可写（多半被安全软件拦截）"}`);
+  }
+  const builtinItem = (res.items || []).find((i) => i.id === "builtin");
+  if (!res.available) {
+    lines.push("\n⚠ 一个可用浏览器都没找到：内置浏览器可能被杀毒软件隔离，本机也没装 Chrome/Edge。请把安装目录加入白名单，或装个 Chrome 后重试。");
+  } else if (res.mode === "builtin" && builtinItem && !builtinItem.found) {
+    lines.push("\n⚠ 你选了「只用内置浏览器」，但内置浏览器文件缺失，登录一定会失败。建议切回「自动」或「只用本机浏览器」。");
+  } else if (res.mode === "system" && !(res.items || []).some((i) => i.id !== "builtin" && i.found)) {
+    lines.push("\n⚠ 你选了「只用本机浏览器」，但这台机器没装 Chrome/Edge，会退回到内置浏览器。");
+  }
+  box.textContent = lines.join("\n");
+});
+
+$("btn-browser-reset").addEventListener("click", async () => {
+  if (!confirm("会删除浏览器登录缓存（相当于退出登录），下次需要重新扫码。确定继续吗？")) return;
+  const res = await window.api.browserResetProfile();
+  $("browser-diag-log").textContent = res.ok
+    ? `已清理登录缓存：${(res.removed || []).join("、") || "（本来就是干净的）"}`
+    : `清理失败：${res.error}`;
+  $("login-status").textContent = "未检查";
+  $("login-status").className = "login-status";
+  toast(res.ok ? "登录浏览器缓存已重置" : "重置失败，请先关掉浏览器窗口", !res.ok);
+});
+
+/* ================= 转录模型（下载失败可重下） ================= */
+const fmtMB = (bytes) => `${(Number(bytes || 0) / 1048576).toFixed(1)}MB`;
+
+function renderModelStatus(info) {
+  const line = $("model-status-line");
+  if (!line) return;
+  if (!info || !info.ok) {
+    line.innerHTML = `<span class="bad">●</span> ${esc(info && info.message || "检测失败")}`;
+    return;
+  }
+  const healthy = info.state === "ok" || info.state === "custom";
+  const dot = healthy ? `<span class="ok">●</span>` : `<span class="bad">●</span>`;
+  const size = info.expectedBytes ? `　${fmtMB(info.presentBytes)} / ${fmtMB(info.expectedBytes)}` : "";
+  line.innerHTML = `${dot} ${esc(info.message)}${size}<br><span style="opacity:.7">目录：${esc(info.modelDir || "-")}</span>`;
+}
+
+async function refreshModelStatus(withBanner) {
+  let info = null;
+  try { info = await window.api.modelStatus(settings); } catch {}
+  renderModelStatus(info);
+  if (withBanner && info && info.ok && info.state !== "ok" && info.state !== "custom") {
+    showBanner(`转录模型不完整（${info.message}），会导致视频转录失败。`, "立即重新下载", () => {
+      switchPage("settings");
+      setTimeout(() => $("btn-model-repair").click(), 200);
+    });
+  }
+  return info;
+}
+
+$("model-endpoint").addEventListener("change", async (e) => {
+  await saveBrowserSetting({ modelEndpoint: e.target.value === "official" ? "official" : "mirror" });
+  toast("模型下载源已切换，下次下载生效");
+});
+
+$("btn-model-repair").addEventListener("click", async () => {
+  const btn = $("btn-model-repair");
+  const logBox = $("model-log");
+  const statusEl = $("model-repair-status");
+  if (btn.disabled) return;
+  if (!confirm("会清掉残缺的模型文件后重新下载（约 465MB，视网速 5~30 分钟）。下载期间请不要关闭软件。继续吗？")) return;
+  logBox.textContent = "";
+  modelLogActive = true;
+  btn.disabled = true;
+  btn.textContent = "下载中…";
+  statusEl.textContent = "正在下载，请保持网络通畅…";
+  try {
+    const res = await window.api.modelRepair(settings);
+    if (res.ok) {
+      statusEl.textContent = res.alreadyOk ? "模型本来就是完整的 ✓" : "模型已修复 ✓";
+      toast(res.alreadyOk ? "模型已完整，无需重新下载" : "模型下载完成，校验通过 ✓");
+    } else {
+      statusEl.textContent = "修复失败";
+      logBox.textContent += `\n❌ ${res.error || "未知错误"}\n`;
+      toast("模型下载失败，请查看下方日志", true);
+      // 失败也要把最新状态刷出来，方便用户判断是真缺失还是误报
+      await refreshModelStatus(false);
+    }
+  } catch (err) {
+    statusEl.textContent = "修复出错";
+    toast(`修复出错：${String(err && err.message || err)}`, true);
+  } finally {
+    modelLogActive = false;
+    btn.disabled = false;
+    btn.textContent = "重新检测并下载模型";
+  }
+  await refreshModelStatus(false);
+});
+
+$("btn-model-open").addEventListener("click", async () => {
+  const res = await window.api.modelOpenFolder(settings);
+  if (!res.ok) toast(res.error || "打开模型目录失败", true);
+});
+
+/* ================= 软件更新 ================= */
+const UPDATE_STATE_TEXT = {
+  idle: "待检查",
+  unconfigured: "还没配置更新源：填好上面的 GitHub 仓库或直链目录后点「保存更新设置」",
+  checking: "正在检查新版本…",
+  available: "发现新版本",
+  latest: "已经是最新版本",
+  downloading: "正在下载更新包…",
+  downloaded: "更新包已下载，点「立即重启安装」完成更新",
+  error: "检查更新失败",
+};
+
+function renderUpdateState(st) {
+  if (!st) return;
+  const ver = $("update-version");
+  if (ver) {
+    ver.innerHTML = `当前版本 <b>v${esc(st.version || "-")}</b>${st.packaged === false ? "　<span style=\"opacity:.7\">（开发模式下不检查更新）</span>" : ""}`;
+  }
+  const percent = st.progress && st.progress.percent ? st.progress.percent : (st.state === "downloaded" ? 100 : 0);
+  const bar = $("update-bar");
+  if (bar) {
+    bar.style.width = `${percent}%`;
+    bar.classList.toggle("bar-done", st.state === "downloaded");
+  }
+  const text = $("update-status-text");
+  if (text) {
+    let msg = UPDATE_STATE_TEXT[st.state] || st.state || "未检查";
+    if (st.state === "available" && st.info && st.info.version) msg = `发现新版本 v${st.info.version}，可以下载安装`;
+    if (st.state === "downloading" && st.progress) {
+      const speed = st.progress.bytesPerSecond ? `　${(st.progress.bytesPerSecond / 1048576).toFixed(1)}MB/s` : "";
+      msg = `正在下载 ${percent}%　${fmtMB(st.progress.transferred)} / ${fmtMB(st.progress.total)}${speed}`;
+    }
+    if (st.state === "error" && st.error) msg = `更新失败：${st.error}`;
+    text.textContent = msg;
+    text.style.color = st.state === "error" ? "#ff7b72" : "";
+  }
+  const notes = $("update-notes");
+  if (notes) {
+    const body = st.info && st.info.notes ? String(st.info.notes) : "";
+    notes.textContent = body ? `更新说明：${body}` : "";
+    notes.hidden = !body;
+  }
+  $("btn-update-download").hidden = st.state !== "available";
+  $("btn-update-install").hidden = st.state !== "downloaded";
+  $("btn-update-check").disabled = st.state === "checking" || st.state === "downloading";
+  if (st.state === "available") {
+    showBanner(`发现新版本 v${(st.info && st.info.version) || ""}，可下载安装。`, "去更新", () => switchPage("settings"));
+  }
+}
+
+async function refreshUpdateStatus() {
+  try {
+    const st = await window.api.updateStatus(settings);
+    renderUpdateState(st);
+    return st;
+  } catch { return null; }
+}
+window.api.onUpdateEvent(renderUpdateState);
+
+async function persistUpdateSettings() {
+  settings = await window.api.saveSettings({
+    updateRepo: $("update-repo").value.trim(),
+    updateFeedUrl: $("update-feed-url").value.trim(),
+    updateAutoCheck: $("update-auto-check").checked,
+  });
+  return settings;
+}
+
+$("btn-update-save").addEventListener("click", async () => {
+  await persistUpdateSettings();
+  toast("更新设置已保存");
+  await refreshUpdateStatus();
+});
+
+$("btn-update-check").addEventListener("click", async () => {
+  // 先落盘输入框里的值：避免"填了仓库但没点保存就检查"导致的空跑
+  await persistUpdateSettings();
+  $("update-status-text").textContent = "正在检查新版本…";
+  const res = await window.api.updateCheck(settings);
+  if (!res.ok) {
+    $("update-status-text").textContent = `检查失败：${res.error || "未知错误"}`;
+    $("update-status-text").style.color = "#ff7b72";
+    toast(res.error || "检查更新失败", true);
+    return;
+  }
+  if (res.updateAvailable) toast(`发现新版本 v${res.latest}，可以下载`);
+  else toast("已经是最新版本");
+  await refreshUpdateStatus();
+});
+
+$("btn-update-download").addEventListener("click", async () => {
+  const res = await window.api.updateDownload();
+  if (!res.ok) toast(res.error || "下载失败", true);
+});
+
+$("btn-update-install").addEventListener("click", async () => {
+  if (!confirm("现在重启并安装新版本？请先保存好手头的事情。")) return;
+  const res = await window.api.updateInstall();
+  if (!res.ok) toast(res.error || "安装失败", true);
 });
 
 /* ================= 界面皮肤 ================= */
 // light: true = 亮色背景图（文字/边框自动切深色方案），false = 暗色背景图（默认浅色文字）
-/* 免费皮肤（前8个），其余保留给后续更新 */
-const FREE_SKINS = ["lake", "forest", "dawn", "meadow", "goldenpeak", "caiyun", "goldleaf", "reedlake"];
+/* 免费皮肤（置顶前四个），其余为会员专属 */
+const FREE_SKINS = ["lake", "forest", "dawn", "meadow"];
 const SKINS = [
   { key: "lake", name: "暮色山海", file: "../assets/skins/lake.jpg", light: false },
   { key: "forest", name: "林海翠微", file: "../assets/skins/forest.jpg", light: false },
@@ -1707,6 +2314,14 @@ const SKINS = [
   { key: "caiyun", name: "彩云追月", file: "../assets/skins/caiyun.jpg", light: true },
   { key: "goldleaf", name: "金叶夜舟", file: "../assets/skins/goldleaf.jpg", light: false },
   { key: "reedlake", name: "苇影湖山", file: "../assets/skins/reedlake.jpg", light: true },
+  { key: "snowlake", name: "雪峰映湖", file: "../assets/skins/snowlake.jpg", light: true },
+  { key: "dusksea", name: "暮海流金", file: "../assets/skins/dusksea.jpg", light: true },
+  { key: "greenlake", name: "碧湖草野", file: "../assets/skins/greenlake.jpg", light: true },
+  { key: "skyroad", name: "雪岭天路", file: "../assets/skins/skyroad.jpg", light: true },
+  { key: "snow", name: "雪岭晴空", file: "../assets/skins/snow.jpg", light: false },
+  { key: "grassland", name: "碧野连天", file: "../assets/skins/grassland.jpg", light: true },
+  { key: "volcano", name: "烈焰熔岩", file: "../assets/skins/volcano.jpg", light: false },
+  { key: "starrylake", name: "雪岭星湖", file: "../assets/skins/starrylake.jpg", light: false },
 ];
 /* 皮肤专属点击特效：每个皮肤一套主/辅/辅2 色 + 四字特效名 + 专属粒子类型（开启专属开关后生效） */
 const FX_COLORS = {
@@ -2200,6 +2815,58 @@ $("btn-resume").addEventListener("click", async () => {
   st.textContent = (res && res.ok) ? "已继续：任务将自动接着跑" : ("继续失败：" + ((res && res.error) || "未知错误"));
   updatePauseUi();
 });
+// 强制停止：立刻杀掉当前处理进程树（含 python / 浏览器 / ffmpeg）
+async function forceStopTask(btn) {
+  if (!btn || btn.disabled) return { ok: false, skipped: true };
+  if (!confirm("强制停止会立刻中断当前正在处理的视频。\n\n· 已生成的笔记不受影响\n· 正在处理的这条会留下半截临时文件，下次处理时会自动重新下载\n· 定时任务也会被一起停掉\n\n确定要停止吗？")) return { ok: false, canceled: true };
+  const originalText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "正在终止…";
+  try {
+    return await window.api.forceStop(settings);
+  } catch (err) {
+    return { ok: false, error: String(err && err.message || err) };
+  } finally {
+    btn.disabled = false;
+    btn.textContent = originalText;
+  }
+}
+
+function forceStopMessage(res) {
+  if (!res) return "停止失败：未知错误";
+  if (res.ok) return res.killed > 0
+    ? `已强制停止 ${res.killed} 个进程${res.clearedLock ? "，并清理了残留锁" : ""}`
+    : (res.message || "当前没有正在运行的任务");
+  return `停止失败：${res.error || "未知错误"}`;
+}
+
+$("btn-force-stop").addEventListener("click", async () => {
+  const st = $("pause-status");
+  st.textContent = "正在终止任务…";
+  const res = await forceStopTask($("btn-force-stop"));
+  if (res && res.canceled) { return updatePauseUi(); }
+  await updatePauseUi();
+  st.textContent = forceStopMessage(res);
+  toast(forceStopMessage(res), !(res && res.ok));
+});
+
+// 总览页也放一个：用户在总览点「开始处理收藏」，找不到停止按钮会去杀进程
+safeOn("dash-force-stop", "click", async () => {
+  const res = await forceStopTask($("dash-force-stop"));
+  if (res && res.canceled) return;
+  // 强制停止后重置总览页暂停按钮（任务已不存在，按钮应回到「暂停」态）
+  dashPaused = false;
+  const pb = $("dash-pause");
+  if (pb) { pb.textContent = "⏸ 暂停"; pb.classList.remove("active"); }
+  toast(forceStopMessage(res), !(res && res.ok));
+  loadOverview();
+});
+
+// 主进程强停成功后广播事件：刷新暂停状态与总览进度
+window.api.onPipelineStopped(() => {
+  updatePauseUi();
+  if ($("page-dashboard") && !$("page-dashboard").hidden) loadOverview();
+});
 $("btn-cleanup-media").addEventListener("click", async () => {
   const st = $("cleanup-status");
   st.textContent = "正在清理…";
@@ -2588,6 +3255,7 @@ document.querySelectorAll(".card-tab").forEach((b) => {
 /* ================= 止损看板 ================= */
 let failFiles = [];
 async function loadFailures() {
+  loadSkippedItems();
   const res = await window.api.failuresList(settings);
   failFiles = res.files || [];
   const sel = $("fail-file");
@@ -2617,6 +3285,72 @@ $("fail-file").addEventListener("change", () => {
 });
 $("fail-refresh").addEventListener("click", loadFailures);
 
+/* ================= 被跳过的视频：查看 + 一键恢复 ================= */
+const SKIP_TYPE_TEXT = {
+  mukbang: "吃播/无教程美食",
+  shortdrama: "短剧",
+  ad: "广告/带货",
+  music: "音乐",
+  dance: "舞蹈/才艺",
+  funny: "搞笑段子",
+  "silent-no-info": "纯画面无信息",
+};
+
+async function loadSkippedItems() {
+  const box = $("skip-list");
+  if (!box) return;
+  box.innerHTML = '<div class="hint">加载中…</div>';
+  let res = null;
+  try { res = await window.api.skippedList(settings); } catch (err) { res = { ok: false, error: String(err && err.message || err) }; }
+  if (!res || !res.ok) {
+    box.innerHTML = `<div class="hint">读取失败：${esc(res && res.error || "未知错误")}</div>`;
+    return;
+  }
+  const items = res.items || [];
+  if (!items.length) {
+    box.innerHTML = '<div class="hint">没有被"内容类型"跳过的视频 👍</div>';
+    return;
+  }
+  box.innerHTML = "";
+  for (const it of items) {
+    const row = document.createElement("div");
+    row.className = "skip-item";
+    const date = String(it.discovered_at || "").slice(0, 10);
+    row.innerHTML = `
+      <div class="skip-main">
+        <div class="skip-title" title="${esc(it.title || it.aweme_id)}">${esc(it.title || it.aweme_id)}</div>
+        <div class="skip-meta">
+          <span class="skip-tag">${esc(SKIP_TYPE_TEXT[it.contentType] || it.contentType || "未知类型")}</span>
+          ${it.author ? `<span>@${esc(it.author)}</span>` : ""}
+          ${date ? `<span>${esc(date)}</span>` : ""}
+          ${it.canRestoreFromCache ? '<span class="skip-ok">可直接补笔记</span>' : '<span class="skip-warn">需重新处理</span>'}
+        </div>
+      </div>
+      <button class="btn small primary">恢复生成笔记</button>`;
+    const btn = row.querySelector("button");
+    btn.addEventListener("click", async () => {
+      btn.disabled = true;
+      btn.textContent = "恢复中…";
+      const r = await window.api.skippedRestore(settings, it.aweme_id);
+      if (r && r.ok && r.okCount > 0) {
+        const one = (r.restored || [])[0] || {};
+        toast(`已生成笔记：${one.note_path ? String(one.note_path).split(/[\\/]/).pop() : "完成"}`);
+        row.remove();
+        if (!$("skip-list").children.length) {
+          $("skip-list").innerHTML = '<div class="hint">没有被"内容类型"跳过的视频 👍</div>';
+        }
+      } else {
+        const err = (r && r.error) || ((r && r.restored && r.restored[0] && r.restored[0].error) || "恢复失败");
+        toast(err, true);
+        btn.disabled = false;
+        btn.textContent = "重试恢复";
+      }
+    });
+    box.appendChild(row);
+  }
+}
+safeOn("btn-skip-refresh", "click", loadSkippedItems);
+
 /* ================= 新增收藏：核对与补充 ================= */
 const NEW_STATUS_TEXT = { discovered: "待处理", media_frozen: "待处理", transcribed: "已转录", extracted: "已提取", failed: "失败", written: "已生成", skipped: "已跳过" };
 const NEW_STATUS_CLASS = { written: "st-ok", skipped: "st-muted", failed: "st-bad" };
@@ -2632,6 +3366,8 @@ async function loadNewArrivals() {
       box.innerHTML = `<div class="hint">${days ? `最近 ${days} 天没有新增收藏` : "还没有收藏记录"}（已跳过的广告/短剧/娱乐类不显示）。</div>`;
       return;
     }
+    const generated = items.filter((it) => it.status === "written").length;
+    const pending = items.filter((it) => it.status === "discovered" || it.status === "media_frozen").length;
     box.innerHTML = `<table class="new-table">
       <thead><tr><th>标题</th><th>新增时间</th><th>状态</th><th>分类</th><th>抖音链接</th></tr></thead>
       <tbody>${items.map((it) => {
@@ -2641,12 +3377,12 @@ async function loadNewArrivals() {
         return `<tr>
           <td class="td-title" title="${esc(t)}">${esc(t.length > 60 ? t.slice(0, 60) + "…" : t)}</td>
           <td class="muted">${esc(when)}</td>
-          <td><span class="tag ${NEW_STATUS_CLASS[it.status] || ""}">${NEW_STATUS_TEXT[it.status] || esc(it.status)}</span></td>
+          <td><span class="tag ${NEW_STATUS_CLASS[it.status] || ""}">${NEW_STATUS_TEXT[it.status] || esc(it.status)}</span>${it.low_substance ? '<span class="tag tag-low" title="视频内容过少，AI 没能提炼，只保留了转录原文；笔记存放在「低信息量笔记」文件夹">仅原文</span>' : ""}</td>
           <td class="muted">${esc(cls) || "—"}</td>
           <td><a href="${esc(it.source_url || `https://www.douyin.com/video/${it.aweme_id}`)}" target="_blank" rel="noopener">打开 ↗</a></td>
         </tr>`;
       }).join("")}</tbody></table>
-      <div class="new-count">共显示 ${items.length} 条 · 已跳过的广告/短剧/娱乐类不列出，可到「止损看板」查看</div>`;
+      <div class="new-count">共显示 ${items.length} 条 · <b>已生成 ${generated}</b> 篇笔记 · <b>${pending}</b> 条待处理（待处理 = 尚未生成笔记，点「开始处理收藏」即可处理） · 已跳过的广告/短剧/娱乐类不列出</div>`;
   } catch (e) {
     box.innerHTML = `<div class="hint">加载失败：${esc(e && e.message || e)}</div>`;
   }
@@ -2681,7 +3417,7 @@ $("new-range").addEventListener("change", loadNewArrivals);
 //   13 位 [0-9A-Za-z]；第 9 位 = 小写 q；第 1 位 == 第 12 位；第 13 位 = 前 12 位码值和的校验位
 // 内置默认兑换服务器：打包分发前把正式网址填在这里（不要带末尾斜杠），
 // 所有使用者的软件都会自动带此地址联网查重；设置页填了地址则以设置页为准。
-const VIP_DEFAULT_SERVER = ""; // 开源版：不连接兑换服务器，所有功能免费开放
+const VIP_DEFAULT_SERVER = "https://1423505442-gm4aaazwih.ap-guangzhou.tencentscf.com";
 const VIP_CHARSET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 function vipChecksum(s12) {
   let sum = 0;
@@ -2696,7 +3432,7 @@ function validVipCode(code) {
 }
 // VIP 专属字体（fontsource/Google Fonts 开源字体，本地自托管，仅会员可切换）
 function isVipActive() {
-  return true; // 开源版：所有功能免费开放
+  return true; // 开源版：全功能免费开放
 }
 
 // 一键复位：残留锁/进度条卡死时由告警区按钮触发，主进程会先确认同步进程真的死了才动手
@@ -2720,9 +3456,11 @@ const VIP_FONTS = {
   zhenkai: { name: "霞鹜臻楷", family: "'LXGW ZhenKai', cursive" },
 };
 function applyVipFont() {
-  const vip = settings && settings.vip;
+  const vip = (settings && settings.vip) || {};
   const active = isVipActive();
-  const key = active && VIP_FONTS[vip.font] ? vip.font : "default";
+  // 全新安装时 settings 里还没有 vip 对象，这里必须判空：
+  // 否则会抛 TypeError 把整个启动流程（后面的皮肤/字体/页面切换）一起打断
+  const key = active && vip.font && VIP_FONTS[vip.font] ? vip.font : "default";
   document.body.style.fontFamily = VIP_FONTS[key].family || "";
   const opts = document.querySelectorAll(".vip-font-opt");
   opts.forEach((o) => o.classList.toggle("active", o.dataset.font === key));
@@ -2739,23 +3477,15 @@ function applyFontSize(px) {
   if (st) st.textContent = v === 14 ? "默认 14" : "当前 " + v;
 }
 function renderVipStatus() {
-  const vip = settings && settings.vip;
   const el = $("vip-status");
   const fontsBox = $("vip-fonts");
   const fontsState = $("vip-fonts-state");
-  if (isVipActive()) {
-    el.textContent = "会员已开通 ✓";
+  if (el) {
+    el.textContent = "全部功能已免费开放 ✓";
     el.classList.add("on");
-    $("vip-hint").textContent = `开通时间：${vip.activatedAt || ""}${vip.nick ? " · " + vip.nick : ""}。感谢支持，专属权益已解锁。`;
-    if (fontsBox) { fontsBox.classList.remove("locked"); }
-    if (fontsState) { fontsState.textContent = "已解锁"; }
-  } else {
-    el.textContent = "未开通";
-    el.classList.remove("on");
-    $("vip-hint").textContent = "";
-    if (fontsBox) { fontsBox.classList.add("locked"); }
-    if (fontsState) { fontsState.textContent = "开通会员解锁"; }
   }
+  if (fontsBox) { fontsBox.classList.remove("locked"); }
+  if (fontsState) { fontsState.textContent = "已解锁"; }
   applyVipFont();
 }
 document.querySelectorAll(".vip-font-opt").forEach((btn) => {
@@ -2780,40 +3510,6 @@ $("fs-reset").addEventListener("click", async () => {
   applyFontSize(14);
   settings = await window.api.saveSettings({ fontSize: 14 });
   $("fs-hint").textContent = "已恢复默认字号 14px";
-});
-$("btn-vip-redeem").addEventListener("click", async () => {  const code = $("vip-code").value.trim();
-  if (!code) { $("vip-hint").textContent = "请先输入兑换码"; return; }
-  if (!validVipCode(code)) { $("vip-hint").textContent = "兑换码无效，请检查后重试"; return; }
-  if (isVipActive()) { $("vip-hint").textContent = "当前已是会员，无需重复兑换"; return; }
-
-  // 内置默认兑换服务器（作者打包时填好正式地址）：非空则先联网查重登记，实现一码一用
-  const server = VIP_DEFAULT_SERVER.replace(/\/+$/, "");
-  if (server) {
-    let hint = "";
-    try {
-      const result = await window.api.vipRedeem(server, code, settings.deviceId || "unknown");
-      if (!result.ok) { hint = "无法连接兑换服务器，请检查网络后重试（配置了服务器地址后需联网兑换）"; }
-      else {
-        const data = result.data;
-        if (!data || data.ok !== true) {
-          hint = data && data.reason === "used"
-            ? "该兑换码已被使用" + (data.device ? "（首次使用设备: " + data.device + "）" : "") + "，请确认是否本人操作"
-            : (data && data.msg ? "兑换失败：" + data.msg : "兑换失败，请稍后重试");
-        }
-      }
-    } catch (err) {
-      hint = "无法连接兑换服务器，请检查网络后重试（配置了服务器地址后需联网兑换）";
-    }
-    if (hint) { $("vip-hint").textContent = hint; return; }
-  }
-
-  const issued = await window.api.vipIssue({ code, activatedAt: new Date().toLocaleString("zh-CN", { hour12: false }) });
-  if (!issued.ok) { $("vip-hint").textContent = "开通状态写入失败，请重试"; return; }
-  vipState = { active: true, code };
-  settings = await window.api.getSettings();
-  renderVipStatus();
-  toast("会员开通成功 ✓ 专属权益已解锁");
-  $("vip-code").value = "";
 });
 
 /* ================= 每周知识周报 ================= */
@@ -2910,6 +3606,7 @@ async function renderWeeklyReport(onClose) {
   const res = await window.api.weeklyStats(settings);
   if (!res || !res.ok) { toast("周报数据读取失败" + (res && res.error ? "：" + res.error : "")); return; }
   const st = weeklyState(res, settings.weeklyReport || {});
+  const vip = isVipActive();
   const body = $("weekly-modal-body");
   // —— 基础版（所有用户可见）：统计卡 + 本周 AI 消耗 + 饼图 + 连续周数 ——
   const dN = res.weekNewNotes - res.lastWeekNewNotes;
@@ -2927,9 +3624,43 @@ async function renderWeeklyReport(onClose) {
       ? `<div class="weekly-chart-row">${weeklyDonutSvg(res.byCategory)}<div class="weekly-legend">${weeklyLegendHtml(res.byCategory)}</div></div>`
       : `<div class="weekly-empty">本周还没有新增笔记 📭<br>定时任务每天会自动整理你的新收藏，下周记得来看成果～</div>`}
     ${res.weekNewNotes > 0 ? `<div class="weekly-streak-line">🏆 连续坚持 <b>${st.streak}</b> 周，知识库正在长成你的第二大脑</div>` : ""}`;
-  // 开源版：只保留基础周报，不显示词云/洞察/AI小结/成就徽章
+  // —— 完整版（会员专属）：词云 / 本周洞察 / 本周小结 / 成就徽章 ——
+  if (vip) {
+    const cloud = buildWordCloud(res.weekNewTitles || []);
+    if (cloud.length) {
+      const ranks = cloud.map((c) => Math.max(1, Math.min(4, Math.ceil(c.w / 10))));
+      html += `<div class="weekly-section-title">☁️ 本周知识热词</div>
+      <div class="weekly-cloud">${cloud.map((c, i) => `<span class="cloud-word cw${ranks[i]}">${escapeHtml(c.word)}</span>`).join("")}</div>`;
+    }
+    // —— 本周洞察（会员专属，全本地数据）：值得回看 / 知识地图 / 反复关注 ——
+    const topNote = res.weekTopNote;
+    const topCat = res.byCategory[0];
+    const paused = (res.lastByCategory || []).filter((c) => !(res.byCategory || []).some((b) => b.name === c.name)).slice(0, 2);
+    html += `<div class="weekly-section-title">🔎 本周洞察</div>
+    <div class="weekly-insight">
+      ${topNote ? `<div class="weekly-insight-card weekly-insight-note" id="weekly-top-note" data-path="${escapeHtml(topNote.absPath)}">📖 <b>值得回看</b><span class="weekly-insight-line">《${escapeHtml(topNote.title)}》</span><span class="weekly-insight-sub">点击打开复习 · 约 ${(topNote.size / 1024).toFixed(0)} KB</span></div>` : ""}
+      <div class="weekly-insight-card">🗺️ <b>知识地图</b><span class="weekly-insight-line">本周覆盖 ${res.byCategory.length} 个分类${topCat ? `，最热「${escapeHtml(topCat.name)}」(${topCat.count} 篇)` : "，还没有产出"}</span>${paused.length ? `<span class="weekly-insight-sub">本周暂停关注：${paused.map((c) => escapeHtml(c.name)).join("、")}</span>` : ""}</div>
+      <div class="weekly-insight-card" id="weekly-direction">🧭 <b>可研究方向</b><span class="weekly-insight-line">AI 正在分析本周收藏集中度…</span></div>
+    </div>`;
+    html += `<div class="weekly-ai" id="weekly-ai"><div class="weekly-ai-title">✨ 本周小结</div><div class="weekly-ai-text">AI 正在根据本周数据为你生成小结…</div></div>`;
+    const unlockedMap = settings.unlockedBadges || {};
+    const badges = WEEKLY_BADGES.map((b) => ({ ...b, unlocked: !!b.check(st, st) || !!unlockedMap[b.id] }));
+    html += `<div class="weekly-badges-title">成就徽章（${badges.filter((b) => b.unlocked).length}/${badges.length}）</div>
+    <div class="weekly-badges">${badges.map((b) => {
+      const cls = b.unlocked ? "bd-unlocked" : "bd-locked";
+      const name = b.name;
+      const desc = b.unlocked ? b.desc : (b.hidden ? "达成条件：？？？" : b.desc);
+      return `<div class="weekly-badge ${cls}">
+        <span class="bd-emoji">${b.unlocked ? b.emoji : "🔒"}</span>
+        <span><span class="bd-name">${name}</span><span class="bd-desc">${desc}</span></span>
+      </div>`;
+    }).join("")}</div>`;
+  } else {
+    html += `<div class="weekly-vip-teaser">🔓 会员可解锁更详细周报：<b>知识热词词云 · 本周洞察 · 本周小结 · 成就徽章</b></div>`;
+  }
   body.innerHTML = html;
   renderApiUsage(res);
+  if (vip) { renderAiSummary(res); renderAiDirection(res); }
   const modal = $("weekly-modal");
   modal.hidden = false;
   const close = () => {
@@ -3003,10 +3734,10 @@ async function renderAiDirection(res) {
     box.innerHTML = `🧭 <b>可研究方向</b><span class="weekly-insight-line weekly-ai-err">${escapeHtml((r && r.error) || "分析失败，可稍后重试")}</span>`;
   }
 }
-// 成就解锁检测：开源版已移除成就系统
+// 成就解锁检测：新达成的徽章持久化，并在软件页面直接弹出解锁动画（不依赖周报弹窗）
 async function checkNewBadges() {
-  return;
-}
+  try {
+    if (!isVipActive()) return; // 成就徽章为会员专属，非会员不检测
     const res = await window.api.weeklyStats(settings);
     if (!res || !res.ok) return;
     const st = weeklyState(res, settings.weeklyReport || {});
@@ -3132,6 +3863,9 @@ $("btn-weekly-view").addEventListener("click", () => {
   try { vipState = await window.api.vipVerify() || { active: false }; } catch { vipState = { active: false }; }
   fillSettingsForm();
   renderVipStatus();
+  // 启动自检：模型是否完整（缺失/被隔离时顶部提示一键重下）、更新源与版本状态
+  refreshModelStatus(true);
+  refreshUpdateStatus();
   applyFontSize(settings.fontSize || 14);
   applySkin(settings.skin || "lake");
   applyMaterial(settings.cardMaterial || "acrylic");

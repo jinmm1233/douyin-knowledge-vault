@@ -1,11 +1,13 @@
 {
   "name": "douyin-knowledge-app",
-  "version": "1.0.0",
+  "version": "1.1.1",
   "description": "抖音收藏 → Obsidian 知识库桌面版：采集、转录、知识提取、笔记浏览、仓颉蒸馏，开箱即用（内置 Python / Whisper / 仓颉）",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "dist": "electron-builder --win nsis"
+    "dist": "electron-builder --win nsis",
+    "dist:feed": "node scripts/make-update-feed.mjs",
+    "serve:feed": "node scripts/make-update-feed.mjs --serve"
   },
   "license": "MIT",
   "author": "eason",
@@ -30,7 +32,26 @@
     "extraResources": [
       {
         "from": "build-runtime",
-        "to": "dok-runtime"
+        "to": "dok-runtime",
+        "filter": [
+          "**/*",
+          "!project/var/state.sqlite3",
+          "!project/var/state.sqlite3-*",
+          "!project/var/api-*.json",
+          "!project/var/*.log",
+          "!project/var/knowledge-cards/**",
+          "!project/var/media/**",
+          "!project/var/transcripts/**",
+          "!project/var/knowledge/**",
+          "!project/var/creator-knowledge/**",
+          "!project/config.json",
+          "!project/var/settings.json",
+          "!project/var/backups/**",
+          "!project/var/categories.json",
+          "!project/var/sync-progress.json",
+          "!project/var/api-usage.jsonl",
+          "!project/var/*.json"
+        ]
       }
     ],
     "win": {
@@ -39,6 +60,13 @@
       ],
       "requestedExecutionLevel": "asInvoker"
     },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "jinmm1233",
+        "repo": "douyin-knowledge-vault"
+      }
+    ],
     "nsis": {
       "oneClick": false,
       "perMachine": false,
@@ -48,7 +76,10 @@
       "shortcutName": "抖音知识库",
       "uninstallDisplayName": "抖音知识库",
       "include": "build/uninstaller.nsh",
-      "artifactName": "抖音知识库-Setup-${version}.${ext}"
+      "artifactName": "DouyinKnowledge-Setup-${version}.${ext}"
     }
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.11"
   }
 }

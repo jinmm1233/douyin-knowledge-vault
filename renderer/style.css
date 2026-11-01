@@ -521,6 +521,14 @@ body.skin-light .vip-benefits { border-color: rgba(15, 23, 42, 0.12); background
 }
 .note-card.nc-consensus .nc-ico { border-color: rgba(251, 191, 36, 0.45); color: #fcd34d; }
 
+/* 最新生成视图 */
+.recent-head { grid-column: 1 / -1; display: flex; align-items: baseline; gap: 10px; margin: 4px 2px 10px; }
+.recent-head-title { font-size: 17px; font-weight: 800; color: var(--text-1); }
+.recent-head-sub { font-size: 12px; color: var(--text-3); }
+.note-card.recent-note { cursor: pointer; }
+.note-card.recent-note:hover { transform: translateY(-2px); }
+#kb-recent-btn.active { background: linear-gradient(135deg, rgba(99, 102, 241, 0.9), rgba(139, 92, 246, 0.9)); color: #fff; border-color: transparent; box-shadow: 0 0 18px rgba(99, 102, 241, 0.4); }
+
 /* 全屏阅读器覆盖层（深色玻璃，透出背景） */
 #reader-overlay {
   position: fixed; inset: 0; z-index: 30;
@@ -621,6 +629,14 @@ body.skin-light #reader-overlay {
   pointer-events: none; user-select: none;
 }
 .gt-node:hover .gt-label { fill: #ffffff; }
+/* 概念节点：空心圈 + 小号斜体标签，只当"笔记之间的连接点"，不抢笔记的视觉重量 */
+.gt-node-concept .gt-core { stroke-width: 1.1; }
+.gt-label-concept { font-size: 9px; font-style: italic; fill: rgba(148, 190, 240, 0.55); }
+.gt-node-concept:hover .gt-label-concept { fill: #ffffff; }
+/* 只被一篇笔记引用的概念：标签平时隐藏，悬停才出现，避免上千个标签糊成一片 */
+.gt-label-minor { opacity: 0; transition: opacity 0.12s ease; }
+.gt-node-concept:hover .gt-label-minor { opacity: 1; }
+.gt-links line.gt-link-concept { stroke: rgba(129, 140, 248, 0.26); stroke-width: 0.9; stroke-dasharray: 3 4; animation-duration: 2.2s; }
 /* 左面板 */
 .gt-ov-row {
   display: flex; justify-content: space-between; padding: 5px 0;
@@ -2212,3 +2228,111 @@ body.skin-light .fs-row .fs-val { color: #0e7490; }
 .stat-num { font-size: 2.14em; }
 .reset-stuck-btn { margin-left:8px; padding:2px 12px; border-radius:8px; border:1px solid rgba(110,231,183,.5); background:rgba(110,231,183,.12); color:#6ee7b7; font-size:12px; cursor:pointer; }
 .reset-stuck-btn:hover { background:rgba(110,231,183,.25); }
+
+.kb-view-tabs {
+  display: flex;
+  gap: 8px;
+  margin: 12px 0;
+}
+.kb-tab {
+  padding: 8px 20px;
+  border-radius: 8px;
+  border: 1px solid rgba(255,255,255,0.15);
+  background: rgba(255,255,255,0.05);
+  color: rgba(255,255,255,0.7);
+  cursor: pointer;
+}
+.kb-tab.active {
+  background: rgba(100,150,255,0.3);
+  color: white;
+  border-color: rgba(100,150,255,0.5);
+}
+.skip-check-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 8px;
+}
+.skip-opt {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: normal;
+}
+
+/* ================= 全局提示条（模型缺失 / 发现新版本） ================= */
+.app-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 14px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: rgba(251, 191, 36, 0.12);
+  border: 1px solid rgba(251, 191, 36, 0.45);
+  color: var(--text-1, #e6edf3);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.app-banner #app-banner-text { flex: 1; min-width: 0; }
+.app-banner .btn { flex: none; }
+body.skin-light .app-banner {
+  background: rgba(251, 191, 36, 0.2);
+  border-color: rgba(180, 120, 0, 0.45);
+  color: #1f2937;
+}
+/* 模型下载日志：等宽、限高、可滚动 */
+#model-log:empty { display: none; }
+
+/* ================= 被跳过的视频（可能误判）列表 ================= */
+.skip-list { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.skip-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  background: rgba(148, 163, 184, 0.10);
+  border: 1px solid rgba(148, 163, 184, 0.22);
+}
+.skip-main { flex: 1; min-width: 0; }
+.skip-title {
+  font-size: 13px;
+  color: var(--text-1);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.skip-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 3px;
+  font-size: 11.5px;
+  color: var(--text-2);
+}
+.skip-tag {
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: rgba(251, 191, 36, 0.18);
+  border: 1px solid rgba(251, 191, 36, 0.35);
+  color: #fbbf24;
+}
+.skip-ok { color: var(--green, #7ee787); }
+.skip-warn { color: var(--amber, #fbbf24); }
+body.skin-light .skip-item { background: rgba(15, 23, 42, 0.05); border-color: rgba(15, 23, 42, 0.12); }
+body.skin-light .skip-tag { background: rgba(180, 120, 0, 0.14); border-color: rgba(180, 120, 0, 0.3); color: #92400e; }
+
+/* 新增收藏：低信息量（只保留转录原文）灰色标签 */
+.new-table .tag + .tag { margin-left: 6px; }
+.new-table .tag.tag-low {
+  background: rgba(148, 163, 184, 0.18);
+  color: var(--text-3, #94a3b8);
+  border-color: rgba(148, 163, 184, 0.35);
+}
+body.skin-light .new-table .tag.tag-low {
+  background: rgba(15, 23, 42, 0.08);
+  color: #475569;
+  border-color: rgba(15, 23, 42, 0.16);
+}
