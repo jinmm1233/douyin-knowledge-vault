@@ -3255,7 +3255,8 @@ document.querySelectorAll(".card-tab").forEach((b) => {
 /* ================= 止损看板 ================= */
 let failFiles = [];
 async function loadFailures() {
-  loadSkippedItems();
+  // 先刷新跳过清单（会顺带把英文报错补译成中文并写缓存），再生成失败清单，保证两边中文一致
+  try { await loadSkippedItems(); } catch {}
   const res = await window.api.failuresList(settings);
   failFiles = res.files || [];
   const sel = $("fail-file");
@@ -3285,7 +3286,7 @@ $("fail-file").addEventListener("change", () => {
 });
 $("fail-refresh").addEventListener("click", loadFailures);
 
-/* ================= 被跳过的视频：查看 + 一键恢复 ================= */
+/* ================= 被跳过的视频：查看 + 补笔记 / 重新处理 ================= */
 const SKIP_TYPE_TEXT = {
   mukbang: "吃播/无教程美食",
   shortdrama: "短剧",
@@ -3295,6 +3296,32 @@ const SKIP_TYPE_TEXT = {
   funny: "搞笑段子",
   "silent-no-info": "纯画面无信息",
 };
+const SKIP_STAGE_TEXT = {
+  discovered: "采集",
+  media_frozen: "下载/语音",
+  transcribed: "转录",
+  extracted: "AI 提炼",
+  written: "写笔记",
+  classify: "内容分类",
+};
+const SKIP_KIND_TEXT = {
+  content: "内容类型跳过",
+  permanent: "无法处理（已放弃）",
+  retry: "重试仍失败",
+  date: "早于起始日期",
+  window: "早于增量窗口",
+  other: "其他原因",
+};
+function skipTagText(it) {
+  if (it.reasonKind === "content") {
+    return SKIP_TYPE_TEXT[it.contentType] || it.contentType || "内容类型跳过";
+  }
+  const stage = SKIP_STAGE_TEXT[it.reasonStage] || it.reasonStage;
+  if (it.reasonKind === "permanent" || it.reasonKind === "retry") {
+    return `${SKIP_KIND_TEXT[it.reasonKind]}${stage ? " · " + stage : ""}`;
+  }
+  return SKIP_KIND_TEXT[it.reasonKind] || "已跳过";
+}
 
 async function loadSkippedItems() {
   const box = $("skip-list");
@@ -3307,43 +3334,77 @@ async function loadSkippedItems() {
     return;
   }
   const items = res.items || [];
+  const summary = $("skip-summary");
+  if (summary) {
+    const c = res.counts || {};
+    const parts = [];
+    if (c.content) parts.push(`内容类型 ${c.content}`);
+    if (c.permanent) parts.push(`无法处理 ${c.permanent}`);
+    if (c.retry) parts.push(`重试失败 ${c.retry}`);
+    if (c.date || c.window) parts.push(`早于起始日期 ${(c.date || 0) + (c.window || 0)}`);
+    summary.textContent = items.length ? `共 ${items.length} 条${parts.length ? " · " + parts.join(" · ") : ""}` : "";
+  }
   if (!items.length) {
-    box.innerHTML = '<div class="hint">没有被"内容类型"跳过的视频 👍</div>';
+    box.innerHTML = '<div class="hint">还没有被跳过的视频 👍</div>';
     return;
   }
+  const emptyHint = () => {
+    if (!$("skip-list").children.length) {
+      $("skip-list").innerHTML = '<div class="hint">还没有被跳过的视频 👍</div>';
+      if ($("skip-summary")) $("skip-summary").textContent = "";
+    }
+  };
   box.innerHTML = "";
   for (const it of items) {
     const row = document.createElement("div");
     row.className = "skip-item";
-    const date = String(it.discovered_at || "").slice(0, 10);
+    const date = String(it.updated_at || it.discovered_at || "").slice(0, 10);
+    const zh = String(it.reasonZh || "").trim();
+    const raw = String(it.reasonText || "").trim();
+    const showReason = it.reasonKind !== "content" && (zh || raw);
     row.innerHTML = `
       <div class="skip-main">
         <div class="skip-title" title="${esc(it.title || it.aweme_id)}">${esc(it.title || it.aweme_id)}</div>
         <div class="skip-meta">
-          <span class="skip-tag">${esc(SKIP_TYPE_TEXT[it.contentType] || it.contentType || "未知类型")}</span>
+          <span class="skip-tag">${esc(skipTagText(it))}</span>
           ${it.author ? `<span>@${esc(it.author)}</span>` : ""}
           ${date ? `<span>${esc(date)}</span>` : ""}
           ${it.canRestoreFromCache ? '<span class="skip-ok">可直接补笔记</span>' : '<span class="skip-warn">需重新处理</span>'}
         </div>
+        ${showReason ? `<div class="skip-reason">${esc(zh || raw)}</div>` : ""}
+        ${showReason && zh && raw && zh !== raw ? `<div class="skip-raw">原文：${esc(raw)}</div>` : ""}
       </div>
-      <button class="btn small primary">恢复生成笔记</button>`;
-    const btn = row.querySelector("button");
-    btn.addEventListener("click", async () => {
-      btn.disabled = true;
-      btn.textContent = "恢复中…";
-      const r = await window.api.skippedRestore(settings, it.aweme_id);
-      if (r && r.ok && r.okCount > 0) {
-        const one = (r.restored || [])[0] || {};
-        toast(`已生成笔记：${one.note_path ? String(one.note_path).split(/[\\/]/).pop() : "完成"}`);
-        row.remove();
-        if (!$("skip-list").children.length) {
-          $("skip-list").innerHTML = '<div class="hint">没有被"内容类型"跳过的视频 👍</div>';
+      ${it.source_url ? `<a class="btn small ghost" href="${esc(it.source_url)}" target="_blank" rel="noreferrer">看原视频</a>` : ""}
+      ${it.canRestoreFromCache
+        ? '<button class="btn small primary" data-act="restore">恢复生成笔记</button>'
+        : '<button class="btn small" data-act="retry">重新处理</button>'}`;
+    const act = row.querySelector("button[data-act]");
+    act.addEventListener("click", async () => {
+      const isRestore = act.dataset.act === "restore";
+      act.disabled = true;
+      act.textContent = isRestore ? "恢复中…" : "已放回队列";
+      const r = isRestore
+        ? await window.api.skippedRestore(settings, it.aweme_id)
+        : await window.api.skippedRetry(settings, it.aweme_id);
+      const okOne = isRestore
+        ? (r && r.ok && r.okCount > 0)
+        : (r && r.ok && r.okCount > 0);
+      if (okOne) {
+        if (isRestore) {
+          const one = (r.restored || [])[0] || {};
+          toast(`已生成笔记：${one.note_path ? String(one.note_path).split(/[\\/]/).pop() : "完成"}`);
+        } else {
+          toast("已放回待处理队列，下次「开始处理」会重新跑这条");
         }
+        row.remove();
+        emptyHint();
       } else {
-        const err = (r && r.error) || ((r && r.restored && r.restored[0] && r.restored[0].error) || "恢复失败");
+        const err = (r && r.error)
+          || ((r && (r.restored || r.retried) && (r.restored || r.retried)[0] && (r.restored || r.retried)[0].error))
+          || (isRestore ? "恢复失败" : "重新处理失败");
         toast(err, true);
-        btn.disabled = false;
-        btn.textContent = "重试恢复";
+        act.disabled = false;
+        act.textContent = isRestore ? "重试恢复" : "重试";
       }
     });
     box.appendChild(row);
